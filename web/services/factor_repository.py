@@ -1,0 +1,353 @@
+import os
+import threading
+from abc import ABC, abstractmethod
+from typing import Callable, FrozenSet, List, Optional, Tuple
+
+import duckdb
+import pandas as pd
+
+from data.date_params import coerce_yyyy_mm_dd
+
+# parquet 列集合缓存：(规范化键, mtime) -> 列名，避免每次 DESCRIBE
+_PARQUET_COLS_CACHE: dict[str, Tuple[float, FrozenSet[str]]] = {}
+_PARQUET_COLS_LOCK = threading.Lock()
+
+
+class BaseFactorRepository(ABC):
+    """因子仓储抽象接口，便于替换不同数据源实现。"""
+
+    @abstractmethod
+    def resolve_factor_parquet_path(self, table_name: Optional[str] = None) -> Optional[str]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def load_factor_from_parquet(
+        self,
+        factor_name: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        table_name: Optional[str] = None,
+    ):
+        raise NotImplementedError
+
+    @abstractmethod
+    def load_multiple_factors_from_parquet(
+        self,
+        factor_names: List[str],
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        table_name: Optional[str] = None,
+        progress_callback: Optional[Callable[[dict], None]] = None,
+    ):
+        raise NotImplementedError
+
+
+class DuckDBFactorRepository(BaseFactorRepository):
+    """DuckDB + Parquet 实现；对 factors_all 优先读项目根下 Hive 分区目录，否则回退单文件。"""
+
+    def __init__(self, parquet_dir: str, hive_dir: Optional[str] = None):
+        self.parquet_dir = os.path.abspath(parquet_dir)
+        if hive_dir is not None:
+            self.hive_dir = os.path.abspath(hive_dir)
+        else:
+            env_h = os.environ.get("FACTORS_HIVE_DIR")
+            self.hive_dir = (
+                os.path.abspath(env_h)
+                if env_h
+                else os.path.join(os.path.dirname(os.path.dirname(self.parquet_dir)), "factors_hive")
+            )
+
+    @staticmethod
+    def _qident(name: str) -> str:
+        """DuckDB 标识符安全引用。"""
+        return '"' + str(name).replace('"', '""') + '"'
+
+    @staticmethod
+    def _parquet_cache_key(path: str) -> str:
+        return os.path.normcase(os.path.abspath(path))
+
+    def _hive_has_parquet(self) -> bool:
+        if not os.path.isdir(self.hive_dir):
+            return False
+        for _root, _dirs, files in os.walk(self.hive_dir):
+            for f in files:
+                if f.lower().endswith(".parquet"):
+                    return True
+        return False
+
+    def _hive_tree_mtime(self) -> float:
+        try:
+            t = os.path.getmtime(self.hive_dir)
+        except OSError:
+            return -1.0
+        try:
+            for name in os.listdir(self.hive_dir):
+                p = os.path.join(self.hive_dir, name)
+                if os.path.isdir(p):
+                    try:
+                        t = max(t, os.path.getmtime(p))
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        return t
+
+    def _resolve_load_plan(
+        self, table_name: Optional[str] = None
+    ) -> Optional[Tuple[str, str, str, float]]:
+        """
+        返回 (mode, path_for_sql, cache_key, cache_mtime)。
+        mode 为 'hive' 时 path_for_sql 为带 ** 的 glob（正斜杠）；'single' 时为单文件路径。
+        """
+        table = (table_name or "factors_all").strip()
+        single_fs = os.path.join(self.parquet_dir, f"{table}.parquet")
+
+        if table == "factors_all" and self._hive_has_parquet():
+            glob_sql = os.path.join(self.hive_dir, "**", "*.parquet").replace("\\", "/")
+            ck = self._parquet_cache_key(self.hive_dir) + "::HIVE"
+            return ("hive", glob_sql, ck, self._hive_tree_mtime())
+
+        if os.path.isfile(single_fs):
+            p = single_fs.replace("\\", "/")
+            ck = self._parquet_cache_key(single_fs)
+            try:
+                mt = os.path.getmtime(single_fs)
+            except OSError:
+                mt = -1.0
+            return ("single", p, ck, mt)
+        return None
+
+    @staticmethod
+    def _sql_escape_path(p: str) -> str:
+        return p.replace("'", "''")
+
+    def _read_parquet_expr(self, mode: str, path_for_sql: str) -> str:
+        esc = self._sql_escape_path(path_for_sql)
+        if mode == "hive":
+            return f"read_parquet('{esc}', hive_partitioning = true)"
+        return f"read_parquet('{esc}')"
+
+    def _columns_for_plan(
+        self, con: duckdb.DuckDBPyConnection, mode: str, path_for_sql: str, cache_key: str, cache_mtime: float
+    ) -> FrozenSet[str]:
+        with _PARQUET_COLS_LOCK:
+            hit = _PARQUET_COLS_CACHE.get(cache_key)
+            if hit is not None and hit[0] == cache_mtime:
+                return hit[1]
+        expr = self._read_parquet_expr(mode, path_for_sql)
+        schema_df = con.execute(f"DESCRIBE SELECT * FROM {expr}").df()
+        cols = frozenset(schema_df["column_name"].astype(str).tolist())
+        with _PARQUET_COLS_LOCK:
+            _PARQUET_COLS_CACHE[cache_key] = (cache_mtime, cols)
+        return cols
+
+    @staticmethod
+    def _partition_prune_sql_and_params(
+        available_cols: FrozenSet[str],
+        start_date: Optional[str],
+        end_date: Optional[str],
+    ) -> Tuple[str, List]:
+        parts: List[str] = []
+        params: List = []
+        if "hive_ym" in available_cols:
+            if start_date:
+                parts.append("hive_ym >= strftime(CAST(? AS DATE), '%Y-%m')")
+                params.append(start_date)
+            if end_date:
+                parts.append("hive_ym <= strftime(CAST(? AS DATE), '%Y-%m')")
+                params.append(end_date)
+        elif "hive_y" in available_cols:
+            if start_date:
+                parts.append("hive_y >= strftime(CAST(? AS DATE), '%Y')")
+                params.append(start_date)
+            if end_date:
+                parts.append("hive_y <= strftime(CAST(? AS DATE), '%Y')")
+                params.append(end_date)
+        if not parts:
+            return "", []
+        return " AND ".join(parts), params
+
+    def resolve_factor_parquet_path(self, table_name: Optional[str] = None) -> Optional[str]:
+        plan = self._resolve_load_plan(table_name)
+        if not plan:
+            return None
+        mode, _path_sql, _ck, _mt = plan
+        if mode == "hive":
+            return self.hive_dir if os.path.isdir(self.hive_dir) else None
+        table = (table_name or "factors_all").strip()
+        path = os.path.join(self.parquet_dir, f"{table}.parquet")
+        return path if os.path.isfile(path) else None
+
+    def load_factor_from_parquet(
+        self,
+        factor_name: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        table_name: Optional[str] = None,
+    ):
+        plan = self._resolve_load_plan(table_name)
+        if not plan:
+            return None
+
+        sd = coerce_yyyy_mm_dd(start_date)
+        ed = coerce_yyyy_mm_dd(end_date)
+
+        mode, path_sql, cache_key, cache_mtime = plan
+        con = None
+        try:
+            con = duckdb.connect(database=":memory:")
+            available_cols = self._columns_for_plan(con, mode, path_sql, cache_key, cache_mtime)
+            available_set = set(available_cols)
+
+            if factor_name not in available_set:
+                label = os.path.basename(self.hive_dir) if mode == "hive" else os.path.basename(path_sql)
+                print(f"[DuckDB] 本地文件缺少因子列: {factor_name} ({label})")
+                return None
+
+            ticker_col = "s_info_windcode" if "s_info_windcode" in available_set else (
+                "ticker" if "ticker" in available_set else None
+            )
+            if ticker_col is None or "trade_dt" not in available_set:
+                label = os.path.basename(self.hive_dir) if mode == "hive" else os.path.basename(path_sql)
+                print(f"[DuckDB] 本地文件缺少必要列(ticker/trade_dt): {label}")
+                return None
+
+            from_expr = self._read_parquet_expr(mode, path_sql)
+            prune_sql, prune_params = self._partition_prune_sql_and_params(
+                available_cols, sd, ed
+            )
+
+            sql = f"""
+                SELECT
+                    {self._qident(ticker_col)} AS ticker,
+                    {self._qident('trade_dt')},
+                    {self._qident(factor_name)} AS factor_value
+                FROM {from_expr}
+                WHERE {self._qident(factor_name)} IS NOT NULL
+            """
+            params: List = list(prune_params)
+            if prune_sql:
+                sql += f" AND ({prune_sql})"
+            if sd:
+                sql += " AND CAST(trade_dt AS DATE) >= ?"
+                params.append(sd)
+            if ed:
+                sql += " AND CAST(trade_dt AS DATE) <= ?"
+                params.append(ed)
+
+            factor_df = con.execute(sql, params).df()
+            if factor_df.empty:
+                return factor_df
+
+            factor_df["trade_dt"] = pd.to_datetime(factor_df["trade_dt"])
+            factor_df["ticker"] = factor_df["ticker"].astype(str).str.upper()
+            src = f"Hive:{os.path.basename(self.hive_dir)}" if mode == "hive" else os.path.basename(path_sql)
+            print(f"[DuckDB] 本地读取成功: {factor_name}, {len(factor_df)} 条 ({src})")
+            return factor_df
+        except Exception as e:
+            print(f"[DuckDB] 本地读取失败: {e}")
+            return None
+        finally:
+            if con is not None:
+                try:
+                    con.close()
+                except Exception:
+                    pass
+
+    def load_multiple_factors_from_parquet(
+        self,
+        factor_names: List[str],
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        table_name: Optional[str] = None,
+        progress_callback: Optional[Callable[[dict], None]] = None,
+    ):
+        plan = self._resolve_load_plan(table_name)
+        if not plan:
+            return None
+
+        sd = coerce_yyyy_mm_dd(start_date)
+        ed = coerce_yyyy_mm_dd(end_date)
+
+        mode, path_sql, cache_key, cache_mtime = plan
+        con = None
+        try:
+            con = duckdb.connect(database=":memory:")
+            available_cols = self._columns_for_plan(con, mode, path_sql, cache_key, cache_mtime)
+            available_set = set(available_cols)
+
+            ticker_col = "s_info_windcode" if "s_info_windcode" in available_set else (
+                "ticker" if "ticker" in available_set else None
+            )
+            if ticker_col is None or "trade_dt" not in available_set:
+                label = os.path.basename(self.hive_dir) if mode == "hive" else os.path.basename(path_sql)
+                print(f"[DuckDB] 本地多因子读取缺少必要列(ticker/trade_dt): {label}")
+                return None
+
+            missing_factors = [f for f in factor_names if f not in available_set]
+            available_factors = [f for f in factor_names if f in available_set]
+            if not available_factors:
+                print(f"[DuckDB] 本地多因子读取缺少全部目标列: {missing_factors[:5]} (共{len(missing_factors)}个)")
+                return None
+            if missing_factors:
+                print(
+                    f"[DuckDB] 本地多因子读取部分缺列，将仅使用本地可用列。"
+                    f"可用{len(available_factors)}个，缺失{len(missing_factors)}个"
+                )
+
+            if progress_callback:
+                progress_callback({"progress": 5.0, "stage": "DuckDB读取", "detail": "开始读取本地Parquet"})
+
+            from_expr = self._read_parquet_expr(mode, path_sql)
+            prune_sql, prune_params = self._partition_prune_sql_and_params(
+                available_cols, sd, ed
+            )
+
+            select_cols = ", ".join([self._qident(f) for f in available_factors])
+            where_not_null = " OR ".join([f"{self._qident(f)} IS NOT NULL" for f in available_factors])
+            sql = f"""
+                SELECT
+                    {self._qident(ticker_col)} AS ticker,
+                    {self._qident('trade_dt')},
+                    {select_cols}
+                FROM {from_expr}
+                WHERE ({where_not_null})
+            """
+            params: List = list(prune_params)
+            if prune_sql:
+                sql += f" AND ({prune_sql})"
+            if sd:
+                sql += " AND CAST(trade_dt AS DATE) >= ?"
+                params.append(sd)
+            if ed:
+                sql += " AND CAST(trade_dt AS DATE) <= ?"
+                params.append(ed)
+
+            df = con.execute(sql, params).df()
+            if df.empty:
+                return df
+
+            if progress_callback:
+                progress_callback({"progress": 90.0, "stage": "DuckDB读取", "detail": f"已读取 {len(df)} 行"})
+
+            df["trade_dt"] = pd.to_datetime(df["trade_dt"])
+            df["ticker"] = df["ticker"].astype(str).str.upper()
+
+            if progress_callback:
+                progress_callback({"progress": 100.0, "stage": "DuckDB读取", "detail": "本地Parquet读取完成"})
+            src = f"Hive:{os.path.basename(self.hive_dir)}" if mode == "hive" else os.path.basename(path_sql)
+            print(f"[DuckDB] 本地多因子读取成功: {len(df)} 条 ({src})")
+            return df
+        except Exception as e:
+            print(f"[DuckDB] 本地多因子读取失败: {e}")
+            return None
+        finally:
+            if con is not None:
+                try:
+                    con.close()
+                except Exception:
+                    pass
+
+
+# 向后兼容：现有调用仍可使用 FactorRepository 名称
+FactorRepository = DuckDBFactorRepository

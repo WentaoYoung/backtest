@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>因子分组回测系统 | GF Quant</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- 左侧参数面板 -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <span class="logo-icon">Q</span>
+                    <span class="logo-text">Quant Lab</span>
+                </div>
+                <p class="sidebar-subtitle">GF Securities</p>
+                <p class="sidebar-subtitle" style="margin-top: 10px;">
+                    <a href="{{ url_for('correlation_page') }}"
+                       style="color: #7eb8da; text-decoration: none; font-size: 13px;">
+                        因子库相关性分析 →
+                    </a>
+                </p>
+                <p class="sidebar-subtitle" style="margin-top: 6px;">
+                    <a href="{{ url_for('multi_factor_page') }}"
+                       style="color: #7eb8da; text-decoration: none; font-size: 13px;">
+                        多因子批量分析 →
+                    </a>
+                </p>
+            </div>
+            
+            <form id="backtest-form" class="param-form">
+                <!-- 因子选择区域 -->
+                <div class="form-section">
+                    <h3 class="section-title">
+                        因子选择
+                        <span class="db-status" id="db-status" title="数据库状态">●</span>
+                    </h3>
+                    
+                    <!-- 加载中遮罩 -->
+                    <div class="loading-overlay" id="factor-loading-overlay" style="display: none;">
+                        <div class="loading-spinner"></div>
+                        <span class="loading-text" id="loading-text">正在加载因子数据...</span>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>数据来源</label>
+                        <div class="form-hint">因子库 或 上传 CSV 因子数据（二选一）</div>
+                    </div>
+
+                    <!-- CSV 上传区域 -->
+                    <div class="form-group" id="csv-upload-group">
+                        <label for="csv_file_input">[FILE] 上传 CSV 因子</label>
+                        <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+                            <input type="file" id="csv_file_input" accept=".csv"
+                                   style="font-size: 12px; color: #ccc; flex: 1;">
+                            <button type="button" id="csv_clear_btn"
+                                    style="font-size: 11px; padding: 4px 10px; background: #2a2a3a; color: #aaa;
+                                           border: 1px solid #444; border-radius: 4px; cursor: pointer; white-space: nowrap;">
+                                清除
+                            </button>
+                        </div>
+                        <p class="form-hint" id="csv-upload-hint">
+                            支持宽表（日期+股票列）或长表（trade_dt/ticker/factor）
+                        </p>
+                    </div>
+
+                    <!-- 因子表选择 -->
+                    <div class="form-group" id="factor-table-group">
+                        <label for="factor_table">选择因子表 <span class="required">*</span></label>
+                        <select id="factor_table" name="factor_table">
+                            <option value="">请先加载因子表列表...</option>
+                            <!-- 动态填充 -->
+                        </select>
+                        <p class="form-hint" id="factor-table-hint" style="display: none;"></p>
+                        <button type="button" id="detect_new_tables_btn" class="btn btn-small" style="margin-top: 8px;">检测新增因子表</button>
+                        <p class="form-hint" id="detect-new-tables-result" style="display: none;"></p>
+                    </div>
+
+                    <!-- 因子选择 -->
+                    <div class="form-group" id="factor-select-group-main">
+                        <label for="factor_name">选择因子 <span class="required">*</span></label>
+                        <select id="factor_name" name="factor_name" disabled>
+                            <option value="">请先选择因子表...</option>
+                            <!-- 动态填充 -->
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-section">
+                    <h3 class="section-title">回测参数</h3>
+
+                    <div class="form-group">
+                        <label for="start_date">起始日期 <span class="required">*</span></label>
+                        <input type="date" id="start_date" name="start_date" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="end_date">结束日期 <span class="required">*</span></label>
+                        <input type="date" id="end_date" name="end_date" required>
+                    </div>
+
+                    <!-- 日期范围验证提示 -->
+                    <div class="date-validation-hint" id="date-validation-hint" style="display: none;">
+                        <span class="validation-icon">[WARN]</span>
+                        <span class="validation-text" id="date-validation-text">-</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="rebalance_freq">调仓频率</label>
+                        <select id="rebalance_freq" name="rebalance_freq">
+                            <option value="daily">每日调仓</option>
+                            <option value="weekly">每周调仓</option>
+                            <option value="monthly">每月调仓</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="n_groups">分组数量</label>
+                        <select id="n_groups" name="n_groups">
+                            <option value="5" selected>5 组</option>
+                            <option value="10">10 组</option>
+                            <option value="20">20 组</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="weight_method">加权方式</label>
+                        <select id="weight_method" name="weight_method">
+                            <option value="equal">等权加权</option>
+                            <option value="mkt_val">市值加权</option>
+                            <option value="factor_score">因子加权</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-section">
+                    <h3 class="section-title">交易设置</h3>
+
+                    <div class="form-group">
+                        <label for="initial_capital">初始资金</label>
+                        <div class="input-with-unit">
+                            <input type="number" id="initial_capital" name="initial_capital" value="1000000" min="10000" step="10000">
+                            <span class="unit">元</span>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="transaction_cost">交易费用</label>
+                        <div class="input-with-unit">
+                            <input type="number" id="transaction_cost" name="transaction_cost" value="0.1" min="0" max="5" step="0.01">
+                            <span class="unit">%</span>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="slippage">滑点</label>
+                        <div class="input-with-unit">
+                            <input type="number" id="slippage" name="slippage" value="0.05" min="0" max="5" step="0.01">
+                            <span class="unit">%</span>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="risk_free_rate">无风险利率</label>
+                        <div class="input-with-unit">
+                            <input type="number" id="risk_free_rate" name="risk_free_rate" value="3" min="0" max="20" step="0.1">
+                            <span class="unit">%</span>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="benchmark">基准指数</label>
+                        <select id="benchmark" name="benchmark">
+                            <option value="000300.SH">沪深300</option>
+                            <option value="none">无基准</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group toggle-group">
+                        <label for="allow_short">允许卖空</label>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="allow_short" name="allow_short" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn-primary" id="btn-run">
+                    <span class="btn-text">开始回测</span>
+                    <span class="btn-loading" style="display: none;">
+                        <span class="spinner"></span> 运行中...
+                    </span>
+                </button>
+            </form>
+
+            <div class="sidebar-footer">
+                <p class="data-info" id="data-info">数据加载中...</p>
+            </div>
+        </aside>
+
+        <!-- 右侧结果展示区 -->
+
+        <main class="main-content">
+            <!-- 状态消息 -->
+            <div id="status-panel" class="status-panel">
+                <div class="status-message info" id="status-message">
+                    请设置参数后点击"开始回测"
+                </div>
+            </div>
+            <div id="progress-panel" class="progress-panel" style="display: none;">
+                <div class="progress-header">
+                    <span id="progress-stage">准备中...</span>
+                    <span id="progress-percent">0%</span>
+                </div>
+                <div class="progress-bar-wrap">
+                    <div id="progress-bar" class="progress-bar"></div>
+                </div>
+                <div class="progress-meta">
+                    <span>当前项目：<span id="progress-detail">--</span></span>
+                    <span>预估剩余：<span id="progress-eta">--</span></span>
+                </div>
+            </div>
+
+
+<div id="factor-summary-section" style="display: none;">
+    <!-- 里面是核心指标卡片 -->
+</div>
+            <!-- 1. 单因子检测结果（最上面） -->
+            <section class="result-section" id="factor-summary-section" style="display: none;">
+                <div class="section-header">
+                    <h2>单因子检测结果</h2>
+                    <p class="section-desc">综合展示因子的预测能力和投资价值，各指标计算说明见下方</p>
+                </div>
+                <div class="metrics-grid">
+                    <div class="metric-card" title="多空组合收益率：做多因子值最高组、做空因子值最低组的年化收益">
+                        <div class="metric-value" id="metric-factor-return">--</div>
+                        <div class="metric-label">因子收益率</div>
+                        <div class="metric-hint">多空组合</div>
+                    </div>
+                    <div class="metric-card" title="最高分组(Top)净值序列的年化夏普比率，衡量风险调整后收益">
+                        <div class="metric-value" id="metric-sharpe">--</div>
+                        <div class="metric-label">夏普比率</div>
+                        <div class="metric-hint">Top组</div>
+                    </div>
+                    <div class="metric-card" title="最高分组(Top)的年化收益率">
+                        <div class="metric-value" id="metric-annual-return">--</div>
+                        <div class="metric-label">年化收益</div>
+                        <div class="metric-hint">Top组</div>
+                    </div>
+                    <div class="metric-card" title="因子值与下期收益的Pearson相关系数均值，衡量因子预测能力">
+                        <div class="metric-value" id="metric-ic">--</div>
+                        <div class="metric-label">IC</div>
+                        <div class="metric-hint">均值</div>
+                    </div>
+                    <div class="metric-card" title="因子值排名与下期收益排名的Spearman相关系数均值，更稳健">
+                        <div class="metric-value" id="metric-rank-ic">--</div>
+                        <div class="metric-label">Rank_IC</div>
+                        <div class="metric-hint">均值</div>
+                    </div>
+                    <div class="metric-card" title="最高分组(Top)净值从峰值到谷底的最大跌幅">
+                        <div class="metric-value" id="metric-max-dd">--</div>
+                        <div class="metric-label">最大回撤</div>
+                        <div class="metric-hint">Top组</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 2. 分组分析（中间） -->
+            <section class="result-section" id="group-analysis-section" style="display: none;">
+                <div class="section-header">
+                    <h2>分组分析</h2>
+                </div>
+                <!-- 分组净值曲线 -->
+                <div class="chart-card full-width">
+                    <div class="card-header">
+                        <h3 id="nav-chart-title">分组净值曲线</h3>
+                        <div class="card-actions">
+                            <!-- 绝对/超额收益切换按钮 -->
+                            <div class="toggle-group" id="nav-toggle-group" style="display: none;">
+                                <button class="btn-toggle active" id="btn-absolute-nav" onclick="switchNavView('absolute')">绝对收益</button>
+                                <button class="btn-toggle" id="btn-excess-nav" onclick="switchNavView('excess')">超额收益</button>
+                            </div>
+                            <button class="btn-icon" title="下载数据" onclick="downloadNavData()">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="7 10 12 15 17 10"></polyline>
+                                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="navChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- 统计表格和Long-Short -->
+                <div class="chart-row">
+                    <div class="chart-card">
+                        <div class="card-header">
+                            <h3>分组统计指标</h3>
+                        </div>
+                        <div class="table-container">
+                            <table id="group-stats-table">
+                                <thead>
+                                    <tr>
+                                        <th>分组</th>
+                                        <th>累计收益%</th>
+                                        <th>年化收益%</th>
+                                        <th>波动率%</th>
+                                        <th>最大回撤%</th>
+                                        <th>夏普</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="group-stats-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="chart-card">
+                        <div class="card-header">
+                            <h3>Long-Short 净值</h3>
+                        </div>
+                        <div class="chart-container small">
+                            <canvas id="longShortChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 分年度统计 -->
+                <div class="chart-card full-width">
+                    <div class="card-header">
+                        <h3>分年度统计</h3>
+                    </div>
+                    <div class="table-container">
+                        <table id="yearly-stats-table">
+                            <thead>
+                                <tr>
+                                    <th>年份</th>
+                                    <th>IC</th>
+                                    <th>IC_std</th>
+                                    <th>IR</th>
+                                    <th>平均收益</th>
+                                    <th>交易日数</th>
+                                </tr>
+                            </thead>
+                            <tbody id="yearly-stats-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 3. IC 分析 -->
+            <section class="result-section" id="ic-analysis-section" style="display: none;">
+                <div class="section-header">
+                    <h2>IC 分析</h2>
+                </div>
+
+                <!-- IC 统计指标 -->
+                <div class="ic-stats-grid">
+                    <div class="ic-stat-card">
+                        <div class="stat-value" id="ic-win-rate">--</div>
+                        <div class="stat-label">IC胜率</div>
+                    </div>
+                    <div class="ic-stat-card">
+                        <div class="stat-value" id="ic-mean">--</div>
+                        <div class="stat-label">IC均值</div>
+                    </div>
+                    <div class="ic-stat-card">
+                        <div class="stat-value" id="ic-ir">--</div>
+                        <div class="stat-label">ICIR</div>
+                    </div>
+                    <div class="ic-stat-card">
+                        <div class="stat-value" id="ic-t-stat">--</div>
+                        <div class="stat-label">t统计量</div>
+                    </div>
+                    <div class="ic-stat-card">
+                        <div class="stat-value" id="ic-stability">--</div>
+                        <div class="stat-label">稳定性</div>
+                    </div>
+                    <div class="ic-stat-card">
+                        <div class="stat-value" id="ic-skewness">--</div>
+                        <div class="stat-label">偏度</div>
+                    </div>
+                    <div class="ic-stat-card">
+                        <div class="stat-value" id="ic-kurtosis">--</div>
+                        <div class="stat-label">峰度</div>
+                    </div>
+                </div>
+
+                <!-- IC 图表 -->
+                <div class="ic-charts-grid">
+                    <div class="chart-card">
+                        <div class="card-header">
+                            <h3>IC 衰减图</h3>
+                        </div>
+                        <div class="chart-container small">
+                            <canvas id="icDecayChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="chart-card">
+                        <div class="card-header">
+                            <h3>IC 分布图</h3>
+                        </div>
+                        <div class="chart-container small">
+                            <canvas id="icDistChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="chart-card">
+                        <div class="card-header">
+                            <h3>IC 累计图</h3>
+                        </div>
+                        <div class="chart-container small">
+                            <canvas id="icCumChart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="chart-card">
+                        <div class="card-header">
+                            <h3>IC 自相关图</h3>
+                        </div>
+                        <div class="chart-container small">
+                            <canvas id="icAutocorrChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 5. 相关性分析（最下面） -->
+            <section class="result-section" id="correlation-section" style="display: none;">
+                <div class="section-header">
+                    <h2>单因子相关性分析</h2>
+                    <p class="section-desc">检测当前因子与已有因子库的相关性，从三个维度判断因子冗余</p>
+                </div>
+
+                <!-- 参数设置区域 -->
+                <div class="correlation-params-row">
+                    <!-- 数据来源选择 -->
+                    <div class="upload-card correlation-param-card">
+                        <div class="card-header">
+                            <h3>选择待检测因子</h3>
+                        </div>
+                        <div class="form-group">
+                            <div class="radio-group">
+                                <label class="radio-label">
+                                    <input type="radio" name="correlation_data_source" value="current" checked>
+                                    <span>当前回测因子</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="correlation_data_source" value="database">
+                                    <span>因子库选择</span>
+                                </label>
+                            </div>
+                        </div>
+                        <p class="form-hint" id="current-factor-hint">将使用当前回测的因子数据进行相关性分析</p>
+
+                        <!-- 因子库选择（隐藏） -->
+                        <div id="correlation-database-select" style="display: none; margin-top: 12px;">
+                            <div class="form-group compact">
+                                <select id="correlation_factor_table" name="correlation_factor_table">
+                                    <option value="">选择因子表...</option>
+                                </select>
+                            </div>
+                            <div class="form-group compact">
+                                <select id="correlation_factor_name" name="correlation_factor_name" disabled>
+                                    <option value="">选择因子...</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 选择对比因子表 -->
+                    <div class="upload-card correlation-param-card">
+                        <div class="card-header">
+                            <h3>选择对比因子表</h3>
+                        </div>
+                        <div class="form-group">
+                            <select id="correlation_target_table" name="correlation_target_table" required>
+                                <option value="">请选择因子表...</option>
+                            </select>
+                            <p class="form-hint">将检测当前因子与该表中所有因子的相关性</p>
+                        </div>
+                    </div>
+
+                    <!-- 阈值设置 -->
+                    <div class="upload-card correlation-param-card">
+                        <div class="card-header">
+                            <h3>相关性阈值</h3>
+                        </div>
+                        <div class="form-group">
+                            <div class="input-with-unit">
+                                <input type="number" id="correlation_threshold" name="correlation_threshold"
+                                       value="0" min="0" max="1" step="0.1"
+                                       title="只计算/显示相关性超过此阈值的因子">
+                            </div>
+                            <p class="form-hint">只显示相关性 ≥ 阈值的因子，设为0显示全部</p>
+                        </div>
+                    </div>
+                </div>
+
+                <button class="btn-secondary" id="btn-analyze-correlation" disabled>
+                    开始相关性分析
+                </button>
+
+                <!-- 相关性分析结果（简化版：三张图表） -->
+                <div id="correlation-results" style="display: none;">
+                    <!-- 筛选信息提示 -->
+                    <div class="correlation-info" id="correlation-filter-info"></div>
+
+                    <!-- 图表卡片 -->
+                    <div class="chart-card full-width">
+                        <div class="card-header">
+                            <h3 id="correlation-chart-title">因子相关性</h3>
+                            <div class="card-actions">
+                                <!-- 三个切换按钮 -->
+                                <div class="toggle-group" id="correlation-toggle-group">
+                                    <button class="btn-toggle active" id="btn-corr-factor" onclick="switchCorrelationChart('factor_correlation')">因子相关性</button>
+                                    <button class="btn-toggle" id="btn-corr-ic" onclick="switchCorrelationChart('ic')">IC</button>
+                                    <button class="btn-toggle" id="btn-corr-return" onclick="switchCorrelationChart('return')">收益率</button>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- 图表说明 -->
+                        <p class="chart-desc" id="correlation-chart-desc">
+                            横轴：时间 | 纵轴：当前因子与对比表中各因子的相关性
+                        </p>
+                        <!-- 图表区域 -->
+                        <div class="chart-container large">
+                            <canvas id="correlationMainChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="{{ url_for('static', filename='chart.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='main.js') }}"></script>
+
+</body>
+</html>

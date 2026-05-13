@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>因子相关性分析 | GF Quant</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0d0d0d; --bg2: #141414; --bg3: #1a1a1a; --bg4: #222;
+  --border: #2a2a2a; --border2: #333;
+  --text: #e8e8e8; --text2: #999; --text3: #555;
+  --green: #4ade80; --green2: #22c55e;
+  --red: #f87171; --amber: #fbbf24; --blue: #60a5fa; --purple: #a78bfa;
+  --mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system,'Noto Sans SC',sans-serif; font-size: 13px; }
+
+/* ── 布局 ── */
+.layout { display:flex; height:100vh; overflow:hidden; }
+
+/* ── 左侧 ── */
+.sidebar { width:260px; min-width:260px; background:var(--bg2); border-right:1px solid var(--border); overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:14px; }
+.panel { background:var(--bg3); border:1px solid var(--border); border-radius:6px; padding:14px; }
+.panel-title { font-size:11px; font-weight:600; color:var(--text3); text-transform:uppercase; letter-spacing:.08em; margin-bottom:12px; }
+
+/* 库状态 */
+.lib-status { display:flex; align-items:center; gap:8px; }
+.status-dot { width:8px; height:8px; border-radius:50%; }
+.dot-ok { background:var(--green); box-shadow:0 0 6px var(--green); }
+.dot-err { background:var(--red); }
+.dot-loading { background:var(--amber); animation:pulse 1s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+/* 上传区 */
+.upload-zone { border:1.5px dashed var(--border2); border-radius:6px; padding:18px; text-align:center; cursor:pointer; transition:border-color .15s; }
+.upload-zone:hover,.upload-zone.over { border-color:var(--green); background:rgba(74,222,128,.03); }
+.upload-zone input { display:none; }
+.upload-hint { color:var(--text3); font-size:11px; line-height:1.6; margin-top:4px; }
+
+/* 上传文件列表 */
+.file-chip { display:flex; justify-content:space-between; align-items:center; padding:5px 8px; background:var(--bg4); border-radius:4px; margin-bottom:4px; border:1px solid var(--border); }
+.file-chip .fc-name { font-family:var(--mono); font-size:11px; color:var(--blue); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:160px; }
+.file-chip .fc-del { cursor:pointer; color:var(--text3); font-size:14px; line-height:1; }
+.file-chip .fc-del:hover { color:var(--red); }
+
+/* 表单 */
+.form-row { margin-bottom:10px; }
+.form-label { display:block; font-size:11px; color:var(--text3); margin-bottom:4px; }
+.form-input, .form-select { width:100%; background:var(--bg4); border:1px solid var(--border2); border-radius:4px; color:var(--text); padding:6px 8px; font-size:12px; font-family:inherit; }
+.form-input:focus,.form-select:focus { outline:none; border-color:var(--green); }
+.form-row.two { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.radio-group { display:flex; flex-direction:column; gap:6px; }
+.radio-item { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text2); }
+.factor-pick-panel { max-height:260px; overflow:auto; border:1px solid var(--border); border-radius:6px; background:var(--bg4); padding:8px; }
+.pick-toolbar { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px; font-size:11px; color:var(--text3); }
+.pick-group { border:1px solid var(--border); border-radius:6px; margin-bottom:8px; overflow:hidden; }
+.pick-group summary { cursor:pointer; list-style:none; padding:8px 10px; background:rgba(255,255,255,0.02); color:var(--text2); font-size:12px; user-select:none; }
+.pick-group summary::-webkit-details-marker { display:none; }
+.pick-items { padding:8px 10px; display:flex; flex-direction:column; gap:6px; }
+.pick-check { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--text); }
+.pick-meta { margin-top:6px; font-size:11px; color:var(--blue); }
+
+/* 按钮 */
+.btn { width:100%; padding:8px; border-radius:5px; border:none; font-size:13px; font-weight:600; cursor:pointer; transition:all .15s; font-family:inherit; }
+.btn-primary { background:var(--green); color:#000; }
+.btn-primary:hover { background:var(--green2); }
+.btn-primary:disabled { background:var(--bg4); color:var(--text3); cursor:not-allowed; }
+.btn-ghost { background:transparent; color:var(--text2); border:1px solid var(--border2); }
+.btn-ghost:hover { background:var(--bg4); color:var(--text); }
+
+/* ── 主区域 ── */
+.main { flex:1; overflow-y:auto; padding:20px 24px; display:flex; flex-direction:column; gap:18px; }
+
+/* 摘要卡片行 */
+.summary-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; }
+.stat-card { background:var(--bg3); border:1px solid var(--border); border-radius:6px; padding:12px; }
+.sc-label { font-size:10px; color:var(--text3); text-transform:uppercase; letter-spacing:.06em; margin-bottom:4px; }
+.sc-val { font-size:20px; font-weight:600; font-family:var(--mono); }
+.snapshot-card { background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:14px 16px; }
+.snapshot-title { font-size:12px; color:var(--text2); font-weight:600; margin-bottom:10px; }
+.snapshot-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
+.snapshot-item { background:rgba(255,255,255,.02); border:1px solid var(--border); border-radius:6px; padding:10px 12px; }
+.snapshot-label { font-size:10px; color:var(--text3); text-transform:uppercase; letter-spacing:.06em; margin-bottom:6px; }
+.snapshot-value { font-size:12px; color:var(--text); line-height:1.5; word-break:break-word; }
+.mono { font-family:var(--mono); }
+
+/* 预警区 */
+.warn-list { display:flex; flex-direction:column; gap:6px; }
+.warn-item { padding:9px 13px; border-radius:5px; border:1px solid; font-size:12px; }
+.warn-high  { border-color:rgba(248,113,113,.4); background:rgba(248,113,113,.05); }
+.warn-med   { border-color:rgba(251,191,36,.3);  background:rgba(251,191,36,.04); }
+.warn-item .wi-title { font-weight:600; margin-bottom:2px; }
+.warn-high .wi-title { color:var(--red); }
+.warn-med  .wi-title { color:var(--amber); }
+.warn-item .wi-body  { color:var(--text2); }
+
+/* 热力图包装 */
+.heatmap-section { background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:16px; }
+.heatmap-title { font-size:13px; font-weight:500; color:var(--text2); margin-bottom:14px; display:flex; align-items:center; gap:10px; }
+.factor-selector { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px; }
+.factor-pill { padding:4px 10px; border-radius:999px; font-size:11px; cursor:pointer; border:1px solid var(--border2); color:var(--text2); transition:all .12s; user-select:none; }
+.factor-pill:hover { border-color:var(--blue); color:var(--blue); }
+.factor-pill.active { background:rgba(96,165,250,.15); border-color:var(--blue); color:var(--blue); }
+.factor-pill.redundant { border-color:rgba(248,113,113,.5); color:var(--red); }
+.factor-pill.redundant.active { background:rgba(248,113,113,.12); }
+
+/* 热力图主体 */
+.heatmap-legend { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:10px 0 14px; color:var(--text3); font-size:11px; }
+.legend-bar { width:160px; height:10px; border-radius:999px; background:linear-gradient(90deg, rgba(96,165,250,.7), rgba(255,255,255,.08), rgba(248,113,113,.75)); border:1px solid var(--border); }
+.heatmap-groups { display:flex; flex-direction:column; gap:12px; }
+.heatmap-group { border:1px solid var(--border); border-radius:8px; background:rgba(255,255,255,.02); overflow:hidden; }
+.heatmap-group-head { display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-bottom:1px solid var(--border); }
+.heatmap-group-title { font-size:12px; color:var(--text2); font-weight:600; }
+.heatmap-group-meta { font-size:11px; color:var(--text3); }
+.heatmap-group-body { overflow-x:auto; padding:12px; }
+.heatmap-grid { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(92px, 92px); gap:8px; align-items:start; }
+.heatmap-col { display:flex; flex-direction:column; gap:6px; align-items:stretch; }
+.heatmap-col-label { min-height:34px; font-size:10px; line-height:1.25; color:var(--text2); word-break:break-word; text-align:center; }
+.heatmap-cell {
+  height:38px; border-radius:8px; border:1px solid rgba(255,255,255,.05);
+  display:flex; align-items:center; justify-content:center; cursor:pointer;
+  font-family:var(--mono); font-size:11px; font-weight:700;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.08);
+}
+.heatmap-cell:hover { outline:1px solid rgba(255,255,255,.25); }
+.heatmap-empty { padding:14px; border:1px dashed var(--border2); border-radius:8px; text-align:center; color:var(--text3); font-size:12px; }
+
+/* 精检弹窗 */
+.detail-panel { background:var(--bg3); border:1px solid var(--border2); border-radius:8px; padding:16px; }
+.detail-panel h4 { font-size:12px; color:var(--text2); margin-bottom:12px; }
+.pair-table { width:100%; border-collapse:collapse; font-size:12px; }
+.pair-table th { padding:6px 10px; text-align:left; color:var(--text3); font-size:11px; border-bottom:1px solid var(--border); font-weight:400; }
+.pair-table td { padding:6px 10px; border-bottom:1px solid var(--border); color:var(--text); }
+.pair-table tr:last-child td { border:none; }
+.pair-table tr:hover td { background:var(--bg4); }
+.badge { display:inline-block; font-size:10px; padding:2px 7px; border-radius:3px; font-weight:600; }
+.badge-redundant { background:rgba(248,113,113,.15); color:var(--red); }
+.badge-ok { background:rgba(74,222,128,.12); color:var(--green); }
+
+/* 空状态 */
+.empty { text-align:center; padding:60px 20px; color:var(--text3); }
+.empty .ei { font-size:32px; margin-bottom:10px; opacity:.35; }
+
+/* Toast */
+.toast-wrap { position:fixed; bottom:24px; right:24px; z-index:999; display:flex; flex-direction:column; gap:6px; }
+</style>
+</head>
+<body>
+<div class="app-container layout">
+
+  <!-- ── 左侧面板 ── -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <span class="logo-icon">Q</span>
+        <span class="logo-text">Quant Lab</span>
+      </div>
+      <p class="sidebar-subtitle">GF Securities</p>
+      <p class="sidebar-subtitle" style="margin-top: 10px;">
+        <a href="/" style="color: #7eb8da; text-decoration: none; font-size: 13px;">单因子回测 →</a>
+      </p>
+      <p class="sidebar-subtitle" style="margin-top: 6px;">
+        <a href="/multi_factor" style="color: #7eb8da; text-decoration: none; font-size: 13px;">多因子批量分析 →</a>
+      </p>
+    </div>
+
+    <!-- 库状态 -->
+    <div class="panel">
+      <div class="panel-title">因子库状态</div>
+      <div class="lib-status">
+        <div class="status-dot dot-loading" id="libDot"></div>
+        <span id="libStatusText" style="font-size:12px;color:var(--text2)">检查中…</span>
+      </div>
+      <div id="libMeta" style="margin-top:8px;font-size:11px;color:var(--text3)"></div>
+      <button class="btn btn-ghost" style="margin-top:10px;font-size:11px;padding:5px" onclick="reloadLibrary()">↺ 刷新库因子清单</button>
+    </div>
+
+    <!-- 上传新因子 -->
+    <div class="panel">
+      <div class="panel-title">上传新因子</div>
+      <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fi').click()">
+        <div style="font-size:20px">📂</div>
+        <div class="upload-hint">点击或拖拽 CSV<br>支持批量上传（宽表格式）</div>
+        <input type="file" id="fi" multiple accept=".csv">
+      </div>
+      <div id="fileList" style="margin-top:8px"></div>
+    </div>
+
+    <!-- 分析参数 -->
+    <div class="panel">
+      <div class="panel-title">分析参数</div>
+      <div class="form-row">
+        <div class="form-label">Step1 快筛阈值（截面相关）</div>
+        <input type="range" id="threshold" min="0.3" max="0.8" step="0.05" value="0.5"
+               oninput="document.getElementById('tval').textContent=this.value"
+               style="width:100%;accent-color:var(--green)">
+        <div style="text-align:right;font-size:11px;color:var(--text2);margin-top:2px">
+          当前阈值：<span id="tval">0.5</span>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-label">IC 计算：未来收益天数</div>
+        <select id="futureDays" class="form-select">
+          <option value="1" selected>T+1（次日）</option>
+          <option value="5">T+5（周）</option>
+          <option value="20">T+20（月）</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <div class="form-label">库因子对比范围</div>
+        <div class="radio-group">
+          <label class="radio-item"><input type="radio" name="compareMode" value="all" checked onchange="onCompareModeChange()"> 与全部库因子对比</label>
+          <label class="radio-item"><input type="radio" name="compareMode" value="category" onchange="onCompareModeChange()"> 仅与某一类因子对比</label>
+          <label class="radio-item"><input type="radio" name="compareMode" value="custom" onchange="onCompareModeChange()"> 手动勾选库因子</label>
+        </div>
+        <div id="compareScopeHint" class="pick-meta">当前将对比 0 个库因子</div>
+      </div>
+      <div class="form-row" id="categoryRow" style="display:none">
+        <div class="form-label">选择类别</div>
+        <select id="compareCategory" class="form-select"></select>
+      </div>
+      <div class="form-row" id="customPickRow" style="display:none">
+        <div class="form-label">选择要对比的库因子</div>
+        <div class="factor-pick-panel">
+          <div class="pick-toolbar">
+            <label class="pick-check"><input type="checkbox" id="pickAllBox" onchange="toggleAllLibraryFactors(this.checked)"> 全选</label>
+            <span id="pickCount">已选 0 个因子</span>
+          </div>
+          <div id="factorPickGroups"></div>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="runBtn" onclick="runAnalysis()" disabled>▶ 开始分析</button>
+    </div>
+
+  </aside>
+
+  <!-- ── 主区域 ── -->
+  <main class="main main-content" id="mainArea">
+    <div class="empty"><div class="ei">🔗</div><div>上传新因子 CSV 后点击"开始分析"</div></div>
+  </main>
+
+</div>
+
+<div class="toast-wrap" id="toastWrap"></div>
+
+<script>
+// ══════════════════════════════════════════════
+// 状态
+// ══════════════════════════════════════════════
+const S = {
+  files: [],           // {name, file}
+  libLoaded: false,
+  lastPayload: null,   // 上次分析结果
+  activeNewFactor: null,
+  libCategories: {},
+};
+
+// ══════════════════════════════════════════════
+// 库状态检查
+// ══════════════════════════════════════════════
+async function checkLibStatus() {
+  const res = await fetch('/api/correlation/library_status').catch(() => null);
+  if (!res) { setLibStatus(false, '服务异常'); return; }
+  const d = await res.json();
+  S.libLoaded = d.loaded;
+  setLibStatus(d.loaded,
+    d.loaded ? `已加载 ${d.factor_count} 个因子` : '未加载',
+    d.loaded
+      ? [
+          Object.entries(d.categories || {}).map(([k,v]) => `${k}(${v.length})`).join(' · '),
+          d.price_source ? `价格口径: ${d.price_source}` : '',
+        ].filter(Boolean).join(' | ')
+      : ''
+  );
+  S.libCategories = d.categories || {};
+  renderLibrarySelector();
+  updateRunBtn();
+}
+
+function setLibStatus(ok, text, meta = '') {
+  const dot = document.getElementById('libDot');
+  dot.className = 'status-dot ' + (ok ? 'dot-ok' : 'dot-err');
+  document.getElementById('libStatusText').textContent = text;
+  document.getElementById('libMeta').textContent = meta;
+}
+
+async function reloadLibrary() {
+  setLibStatus(false, '加载中…');
+  document.getElementById('libDot').className = 'status-dot dot-loading';
+  const res = await fetch('/api/correlation/reload_library', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({})
+  });
+  const d = await res.json();
+  if (d.success) {
+    toast(`成功加载 ${d.factor_count} 个库因子（${d.load_time_sec}s）`);
+    await checkLibStatus();
+  } else {
+    toast(d.message, 'err');
+    setLibStatus(false, '加载失败');
+  }
+}
+
+// ══════════════════════════════════════════════
+// 文件上传
+// ══════════════════════════════════════════════
+const uploadZone = document.getElementById('uploadZone');
+const fi = document.getElementById('fi');
+
+fi.addEventListener('change', e => addFiles(e.target.files));
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('over'));
+uploadZone.addEventListener('drop', e => { e.preventDefault(); uploadZone.classList.remove('over'); addFiles(e.dataTransfer.files); });
+
+function addFiles(files) {
+  for (const f of files) {
+    if (!f.name.endsWith('.csv')) { toast(`${f.name} 不是 CSV 文件`, 'warn'); continue; }
+    const name = f.name.replace('.csv', '');
+    if (!S.files.find(x => x.name === name)) S.files.push({ name, file: f });
+  }
+  renderFileList();
+  updateRunBtn();
+  fi.value = '';
+}
+
+function removeFile(name) {
+  S.files = S.files.filter(x => x.name !== name);
+  renderFileList();
+  updateRunBtn();
+}
+
+function renderFileList() {
+  document.getElementById('fileList').innerHTML = S.files.map(f => `
+    <div class="file-chip">
+      <span class="fc-name">${f.name}</span>
+      <span class="fc-del" onclick="removeFile('${f.name}')">×</span>
+    </div>`).join('');
+}
+
+function updateRunBtn() {
+  document.getElementById('runBtn').disabled = !(S.libLoaded && S.files.length > 0);
+}
+
+function currentCompareMode() {
+  return document.querySelector('input[name="compareMode"]:checked')?.value || 'all';
+}
+
+function onCompareModeChange() {
+  const mode = currentCompareMode();
+  document.getElementById('categoryRow').style.display = mode === 'category' ? '' : 'none';
+  document.getElementById('customPickRow').style.display = mode === 'custom' ? '' : 'none';
+  updateCompareScopeHint();
+}
+
+function renderLibrarySelector() {
+  const cats = S.libCategories || {};
+  const catSelect = document.getElementById('compareCategory');
+  const groups = Object.entries(cats).sort((a, b) => a[0].localeCompare(b[0], 'zh-CN'));
+  catSelect.innerHTML = groups.map(([cat, items]) => `<option value="${cat}">${cat} (${items.length}个)</option>`).join('');
+
+  const html = groups.map(([cat, items], idx) => `
+    <details class="pick-group" ${idx < 3 ? 'open' : ''}>
+      <summary>▼ ${cat}（${items.length}个）</summary>
+      <div class="pick-items">
+        ${items.map(name => `
+          <label class="pick-check">
+            <input type="checkbox" class="lib-factor-box" value="${name}" onchange="refreshLibraryPickCount()">
+            <span>${name}</span>
+          </label>
+        `).join('')}
+      </div>
+    </details>
+  `).join('');
+  document.getElementById('factorPickGroups').innerHTML = html;
+  toggleAllLibraryFactors(true);
+  onCompareModeChange();
+  updateCompareScopeHint();
+}
+
+function toggleAllLibraryFactors(checked) {
+  document.querySelectorAll('.lib-factor-box').forEach(el => { el.checked = checked; });
+  const pickAll = document.getElementById('pickAllBox');
+  if (pickAll) pickAll.checked = checked;
+  refreshLibraryPickCount();
+}
+
+function refreshLibraryPickCount() {
+  const boxes = [...document.querySelectorAll('.lib-factor-box')];
+  const checked = boxes.filter(el => el.checked).length;
+  document.getElementById('pickCount').textContent = `已选 ${checked} 个因子`;
+  const pickAll = document.getElementById('pickAllBox');
+  if (pickAll && boxes.length) {
+    pickAll.checked = checked === boxes.length;
+    pickAll.indeterminate = checked > 0 && checked < boxes.length;
+  }
+  updateCompareScopeHint();
+}
+
+function updateCompareScopeHint() {
+  const el = document.getElementById('compareScopeHint');
+  if (!el) return;
+  const mode = currentCompareMode();
+  if (mode === 'all') {
+    const total = Object.values(S.libCategories || {}).reduce((s, arr) => s + arr.length, 0);
+    el.textContent = `当前将对比全部库因子，共 ${total} 个`;
+    return;
+  }
+  if (mode === 'category') {
+    const cat = document.getElementById('compareCategory').value || '';
+    const count = (S.libCategories?.[cat] || []).length;
+    el.textContent = `当前仅对比类别「${cat || '未选择'}」，共 ${count} 个`;
+    return;
+  }
+  const checked = document.querySelectorAll('.lib-factor-box:checked').length;
+  el.textContent = `当前手动选择了 ${checked} 个库因子`;
+}
+
+// ══════════════════════════════════════════════
+// 主分析
+// ══════════════════════════════════════════════
+async function runAnalysis() {
+  const btn = document.getElementById('runBtn');
+  btn.disabled = true;
+  btn.textContent = '分析中…';
+
+  const fd = new FormData();
+  for (const { name, file } of S.files) {
+    fd.append('files[]', file);
+    fd.append('names[]', name);
+  }
+  fd.append('threshold', document.getElementById('threshold').value);
+  fd.append('future_days', document.getElementById('futureDays').value);
+  const compareMode = currentCompareMode();
+  fd.append('compare_mode', compareMode);
+  if (compareMode === 'category') {
+    fd.append('compare_category', document.getElementById('compareCategory').value);
+  } else if (compareMode === 'custom') {
+    const selected = [...document.querySelectorAll('.lib-factor-box:checked')].map(el => el.value);
+    for (const name of selected) fd.append('selected_library_factors[]', name);
+  }
+
+  try {
+    const res = await fetch('/api/correlation/analyze', { method: 'POST', body: fd });
+    const data = await res.json();
+
+    if (!data.success) {
+      toast(data.message, 'err');
+      return;
+    }
+    if (data.parse_errors?.length) {
+      data.parse_errors.forEach(e => toast(`${e.file}: ${e.error}`, 'warn'));
+    }
+
+    S.lastPayload = data.data;
+    S.activeNewFactor = data.data.new_factors[0] || null;
+    const perf = data.perf || data.data?.perf || null;
+    const quickThresholdUsed = (data.quick_threshold_used ?? data.data?.quick_threshold_used);
+    const step2CandidateCount = (data.step2_candidate_count ?? data.data?.step2_candidate_count);
+    renderResults(data.data, data.factor_details, perf, quickThresholdUsed, step2CandidateCount);
+    const selectedCount = data.library_selection?.selected_count;
+    toast(`分析完成，${data.data.new_factors.length} 个新因子，匹配 ${selectedCount ?? data.data.lib_factors.length} 个库因子`);
+  } catch (e) {
+    toast('请求失败：' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ 开始分析';
+  }
+}
+
+// ══════════════════════════════════════════════
+// 渲染结果
+// ══════════════════════════════════════════════
+function renderResults(payload, factorDetails, perf, quickThresholdUsed, step2CandidateCount) {
+  const { new_factors, lib_factors, lib_categories, matrix, warnings, step2_details, factor_status } = payload;
+  const thresholdDisplay = quickThresholdUsed ?? document.getElementById('threshold')?.value ?? '-';
+  const step2CountDisplay = step2CandidateCount ?? Object.values(step2_details || {}).reduce((acc, arr) => acc + (arr?.length || 0), 0);
+
+  const redundantCount = Object.values(factor_status).filter(s => s.is_redundant).length;
+  const cleanCount = new_factors.length - redundantCount;
+
+  // ── 摘要卡片 ──
+  let html = `
+    <div class="summary-row">
+      ${statCard('新因子数', new_factors.length, 'var(--blue)')}
+      ${statCard('库因子数', lib_factors.length, 'var(--text2)')}
+      ${statCard('冗余因子', redundantCount, redundantCount > 0 ? 'var(--red)' : 'var(--green)')}
+      ${statCard('独立因子', cleanCount, 'var(--green)')}
+      ${statCard('高相关预警', warnings.length, warnings.length > 0 ? 'var(--amber)' : 'var(--green)')}
+    </div>`;
+  html += `<div class="panel" style="padding:10px 12px">
+    <div style="font-size:11px;color:var(--text3)">本次对比范围</div>
+    <div class="pick-meta">${describeCompareScope(lib_factors, lib_categories)}</div>
+    <div style="margin-top:6px;font-size:11px;color:var(--text3)">
+      Step1阈值：<span style="color:var(--text1);font-family:var(--mono)">${thresholdDisplay}</span>
+      ，Step2配对数：<span style="color:var(--text1);font-family:var(--mono)">${step2CountDisplay}</span>
+    </div>
+    <div style="margin-top:4px;font-size:11px;color:var(--text3)">
+      ${renderCacheHint(perf)}
+    </div>
+  </div>`;
+
+  // ── 预警区 ──
+  if (warnings.length > 0) {
+    html += `<div class="warn-list">`;
+    // 去重：同一对只显示一次
+    const seen = new Set();
+    for (const w of warnings) {
+      const key = `${w.new_factor}__${w.lib_factor}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const isHigh = Math.abs(w.cross_corr) >= 0.7 || (w.ic_corr != null && Math.abs(w.ic_corr) >= 0.5);
+      html += `<div class="warn-item ${isHigh ? 'warn-high' : 'warn-med'}">
+        <div class="wi-title">${isHigh ? '🔴' : '🟡'} ${w.new_factor}  ×  ${w.lib_factor}</div>
+        <div class="wi-body">${w.reason}</div>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
+  // ── 新因子选择器（每个新因子一个标签，点击切换热力图） ──
+  html += `<div class="heatmap-section">
+    <div class="heatmap-title">
+      热力图：新因子 vs 库因子截面相关
+      <span style="font-size:11px;color:var(--text3)">（点击标签切换；列按因子类别分组）</span>
+    </div>
+    <div class="factor-selector" id="factorSelector">
+      ${new_factors.map((n, i) => {
+        const st = factor_status[n];
+        return `<div class="factor-pill ${st?.is_redundant ? 'redundant' : ''} ${i === 0 ? 'active' : ''}"
+                     onclick="switchHeatmap('${n}')" data-factor="${n}">${n}</div>`;
+      }).join('')}
+    </div>
+    <div class="heatmap-scroll" id="heatmapContainer"></div>
+  </div>`;
+
+  // ── Step2 精检明细（默认显示第一个新因子） ──
+  html += `<div class="detail-panel" id="detailPanel"></div>`;
+
+  document.getElementById('mainArea').innerHTML = html;
+
+  // 渲染第一个因子的热力图
+  renderHeatmap(new_factors[0], lib_factors, lib_categories, matrix, new_factors);
+  renderDetail(new_factors[0], step2_details, factor_status);
+
+  // 把 step2_details 存到全局供切换用
+  window._step2 = step2_details;
+  window._factorStatus = factor_status;
+  window._payload = payload;
+}
+
+function switchHeatmap(name) {
+  S.activeNewFactor = name;
+  // 更新 pill 状态
+  document.querySelectorAll('.factor-pill').forEach(p => {
+    p.classList.toggle('active', p.dataset.factor === name);
+  });
+  const { lib_factors, lib_categories, matrix, new_factors } = window._payload;
+  renderHeatmap(name, lib_factors, lib_categories, matrix, new_factors);
+  renderDetail(name, window._step2, window._factorStatus);
+}
+
+// ══════════════════════════════════════════════
+// 热力图渲染
+// ══════════════════════════════════════════════
+function renderHeatmap(newFactor, libFactors, libCategories, matrix, newFactors) {
+  const rowIdx = newFactors.indexOf(newFactor);
+  if (rowIdx < 0) return;
+  const row = matrix[rowIdx];
+
+  // 按类别分组列
+  const catGroups = {};
+  libFactors.forEach((f, i) => {
+    const cat = libCategories[i] || '其他';
+    if (!catGroups[cat]) catGroups[cat] = [];
+    catGroups[cat].push({ name: f, idx: i, val: row[i] });
+  });
+
+  const orderedGroups = Object.entries(catGroups).map(([cat, items]) => {
+    return [cat, [...items].sort((a, b) => Math.abs(b.val) - Math.abs(a.val))];
+  });
+
+  let html = `
+    <div class="heatmap-legend">
+      <span>颜色越深，绝对相关越高</span>
+      <div class="legend-bar"></div>
+      <span>负相关</span>
+      <span style="margin-left:auto">当前新因子：<span style="color:var(--blue)">${newFactor}</span></span>
+    </div>
+    <div class="heatmap-groups">
+  `;
+
+  for (const [cat, items] of orderedGroups) {
+    if (!items.length) continue;
+    html += `
+      <div class="heatmap-group">
+        <div class="heatmap-group-head">
+          <div class="heatmap-group-title">${cat}</div>
+          <div class="heatmap-group-meta">${items.length} 个库因子</div>
+        </div>
+        <div class="heatmap-group-body">
+          <div class="heatmap-grid">
+            ${items.map(item => {
+              const v = item.val;
+              const { bg, fg } = heatColor(v);
+              return `
+                <div class="heatmap-col" title="${item.name}">
+                  <div class="heatmap-col-label">${shortFactorName(item.name)}</div>
+                  <div class="heatmap-cell" style="background:${bg};color:${fg}"
+                       onclick="showCellDetail('${newFactor}','${item.name}',${v == null ? 'null' : v})">${formatHeatValue(v)}</div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  if (!orderedGroups.length) {
+    html += `<div class="heatmap-empty">当前没有可展示的库因子相关性结果</div>`;
+  }
+
+  html += `</div>`;
+  document.getElementById('heatmapContainer').innerHTML = html;
+}
+
+function heatColor(v) {
+  if (v == null || Number.isNaN(v)) return { bg: 'rgba(255,255,255,0.03)', fg: '#777' };
+  const a = Math.abs(v);
+  if (a >= 0.7) return { bg: v > 0 ? 'rgba(248,113,113,0.55)' : 'rgba(96,165,250,0.5)', fg: '#fff' };
+  if (a >= 0.5) return { bg: v > 0 ? 'rgba(248,113,113,0.30)' : 'rgba(96,165,250,0.28)', fg: '#e8e8e8' };
+  if (a >= 0.3) return { bg: v > 0 ? 'rgba(251,191,36,0.20)'  : 'rgba(167,139,250,0.18)', fg: '#ccc' };
+  return { bg: 'rgba(255,255,255,0.03)', fg: '#555' };
+}
+
+function shortFactorName(name) {
+  if (!name) return '';
+  return name.length > 14 ? name.slice(0, 12) + '…' : name;
+}
+
+function formatHeatValue(v) {
+  return (v == null || Number.isNaN(v)) ? 'NA' : v.toFixed(2);
+}
+
+function showCellDetail(newF, libF, crossCorr) {
+  const meta = (window._factorStatus?.[newF]?.cross_corr_meta || {})[libF] || {};
+  const step2 = (window._step2 || {})[newF] || [];
+  const pair = step2.find(p => p.lib_factor === libF);
+  const sampleInfo = ` 公共日期=${meta.common_dates ?? 0} 公共股票=${meta.common_tickers ?? 0} 有效天数=${meta.valid_days ?? 0}`;
+  if (!pair) {
+    const corrText = (crossCorr == null || Number.isNaN(crossCorr)) ? 'NA' : crossCorr.toFixed(3);
+    const reason = meta.insufficient_reason
+      ? ` ${meta.insufficient_reason}`
+      : ' 未进入IC精检：|截面相关|<0.5（Step1→Step2 门槛，见 multi/factor_correlation.py）';
+    toast(`${newF} × ${libF}  截面相关=${corrText}${sampleInfo}${reason}`);
+  } else {
+    const icStr = pair.ic_corr != null ? `  IC序列相关=${pair.ic_corr.toFixed(3)}` : '  IC序列：样本不足';
+    const corrText = pair.cross_corr != null ? pair.cross_corr.toFixed(3) : 'NA';
+    const reason = pair.insufficient_reason ? ` ${pair.insufficient_reason}` : '';
+    toast(`${newF} × ${libF}  截面=${corrText}${icStr}${sampleInfo}${reason}  ${pair.is_redundant ? '⚠️冗余' : '✅独立'}`);
+  }
+}
+
+// ══════════════════════════════════════════════
+// Step2 精检明细表
+// ══════════════════════════════════════════════
+function renderDetail(newFactor, step2Details, factorStatus) {
+  const pairs = step2Details[newFactor];
+  const status = factorStatus[newFactor];
+  const panel = document.getElementById('detailPanel');
+
+  if (!pairs || pairs.length === 0) {
+    panel.innerHTML = `<h4>${newFactor} — Step1 快筛：无配对超过阈值，无需精检</h4>
+      <div style="font-size:12px;color:var(--green)">✅ 与全部库因子截面相关均低于阈值，因子独立性良好</div>`;
+    return;
+  }
+
+  let rows = pairs.map(p => {
+    const icStr = p.ic_corr != null ? p.ic_corr.toFixed(4) : '<span style="color:var(--text3)">样本不足</span>';
+    const crossStr = p.cross_corr != null ? `${p.cross_corr >= 0 ? '+' : ''}${p.cross_corr.toFixed(4)}` : '<span style="color:var(--text3)">NA</span>';
+    const badge = p.is_redundant
+      ? '<span class="badge badge-redundant">冗余</span>'
+      : '<span class="badge badge-ok">独立</span>';
+    return `<tr>
+      <td style="font-family:var(--mono);color:var(--blue)">${p.lib_factor}</td>
+      <td style="font-family:var(--mono);color:${p.cross_corr != null && Math.abs(p.cross_corr)>=.7?'var(--red)':'var(--amber)'}">
+        ${crossStr}
+      </td>
+      <td style="font-family:var(--mono)">${icStr}</td>
+      <td>${badge}</td>
+      <td style="color:var(--text3);font-size:11px">${p.reason}<br>公共日期=${p.common_dates ?? 0}，公共股票=${p.common_tickers ?? 0}，有效天数=${p.valid_days ?? 0}${p.insufficient_reason ? `，${p.insufficient_reason}` : ''}</td>
+    </tr>`;
+  }).join('');
+
+  panel.innerHTML = `
+    <h4>${newFactor} — Step2 精检明细
+      <span style="margin-left:8px;font-size:11px;color:${status?.is_redundant?'var(--red)':'var(--green)'}">
+        ${status?.is_redundant ? '⚠️ ' + status.summary : '✅ 未发现冗余配对'}
+      </span>
+    </h4>
+    <table class="pair-table">
+      <thead><tr>
+        <th>库因子</th><th>截面相关（均值）</th><th>IC序列相关</th><th>判断</th><th>说明</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+// ══════════════════════════════════════════════
+// 工具
+// ══════════════════════════════════════════════
+function statCard(label, val, color) {
+  return `<div class="stat-card">
+    <div class="sc-label">${label}</div>
+    <div class="sc-val" style="color:${color}">${val}</div>
+  </div>`;
+}
+
+function describeCompareScope(libFactors, libCategories) {
+  const mode = currentCompareMode();
+  if (mode === 'all') return `与全部库因子对比，共 ${libFactors.length} 个`;
+  if (mode === 'category') {
+    const cat = document.getElementById('compareCategory').value || '未指定';
+    return `仅与类别「${cat}」对比，共 ${libFactors.length} 个`;
+  }
+  const cats = [...new Set(libCategories || [])];
+  return `手动勾选模式，共 ${libFactors.length} 个，覆盖 ${cats.length} 个类别`;
+}
+
+function renderCacheHint(perf) {
+  if (!perf) return '缓存状态：后端未返回性能字段（请重启后端以启用详细缓存统计）';
+  const libHit = Number(perf.library_cache_hit_count || 0);
+  const libMiss = Number(perf.library_cache_miss_count || 0);
+  const analysisHit = perf.analysis_cache_hit ? '命中' : '未命中';
+  return `缓存状态：库缓存 命中 ${libHit} / 未命中 ${libMiss}，分析缓存 ${analysisHit}；耗时 total=${perf.total_sec ?? '-'}s（load=${perf.load_sec ?? '-'}s, run=${perf.run_sec ?? '-'}s）`;
+}
+
+function toast(msg, type = 'ok') {
+  const colors = { ok: ['#0f2a1a','#4ade80','#1a4a2a'], warn: ['#1a1a0a','#fbbf24','#3a3010'], err: ['#2a0a0a','#f87171','#4a1010'] };
+  const [bg, fg, border] = colors[type] || colors.ok;
+  const el = document.createElement('div');
+  el.style.cssText = `padding:10px 14px;border-radius:6px;font-size:12px;background:${bg};color:${fg};border:1px solid ${border};max-width:360px;line-height:1.4`;
+  el.textContent = msg;
+  document.getElementById('toastWrap').appendChild(el);
+  setTimeout(() => el.remove(), type === 'err' ? 5000 : 3000);
+}
+
+// ══════════════════════════════════════════════
+// 初始化
+// ══════════════════════════════════════════════
+checkLibStatus();
+</script>
+</body>
+</html>

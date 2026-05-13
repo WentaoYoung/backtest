@@ -1,0 +1,10 @@
+这些 CSV 的列名（股票代码）与 data/adjopen_wide.csv 一致，可直接用于上传。
+
+主页 CSV 回测：
+  demo_momentum_wide.csv  或  demo_momentum_long.csv  或  demo_value_wide.csv
+
+因子相关性页 /correlation（新因子宽表，可多选文件）：
+  correlation_alpha_wide.csv  correlation_beta_wide.csv
+
+多因子页 /multi_factor（每个文件一个因子）：
+  mf_quality_wide.csv  mf_growth_wide.csv

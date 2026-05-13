@@ -1,0 +1,1743 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多因子分析 | GF Quant</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ─── 与现有 style.css 同源的深色主题变量 ─── */
+:root {
+  --bg: #0d0d0d;
+  --bg2: #141414;
+  --bg3: #1a1a1a;
+  --bg4: #222;
+  --border: #2a2a2a;
+  --border2: #333;
+  --text: #e8e8e8;
+  --text2: #999;
+  --text3: #666;
+  --accent: #4ade80;
+  --accent2: #22c55e;
+  --warn: #fbbf24;
+  --danger: #f87171;
+  --info: #60a5fa;
+  --purple: #a78bfa;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, 'Noto Sans SC', sans-serif;
+  font-size: 13px;
+  min-height: 100vh;
+}
+
+/* ─── 主布局 ─── */
+.layout { display: flex; height: 100vh; overflow: hidden; }
+
+/* ─── 左侧面板 ─── */
+.sidebar {
+  width: 280px; min-width: 280px;
+  background: var(--bg2); border-right: 1px solid var(--border);
+  overflow-y: auto; padding: 16px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+
+.panel {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 6px; padding: 14px;
+}
+.panel-title {
+  font-size: 11px; font-weight: 600; color: var(--text3);
+  text-transform: uppercase; letter-spacing: 0.08em;
+  margin-bottom: 12px;
+}
+
+/* 上传区 */
+.upload-zone {
+  border: 1.5px dashed var(--border2); border-radius: 6px;
+  padding: 20px; text-align: center; cursor: pointer;
+  transition: border-color 0.15s;
+}
+.upload-zone:hover, .upload-zone.drag-over {
+  border-color: var(--accent); background: rgba(74,222,128,0.03);
+}
+.upload-zone input[type=file] { display: none; }
+.upload-icon { font-size: 24px; margin-bottom: 6px; }
+.upload-hint { color: var(--text3); font-size: 11px; line-height: 1.5; }
+
+/* 因子列表 */
+.factor-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 7px 10px; border-radius: 4px; border: 1px solid var(--border);
+  margin-bottom: 4px; background: var(--bg4);
+}
+.factor-item .f-name { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
+.factor-item .f-meta { font-size: 10px; color: var(--text3); }
+.factor-item .del-btn {
+  cursor: pointer; color: var(--text3); font-size: 14px;
+  padding: 0 4px; line-height: 1;
+}
+.factor-item .del-btn:hover { color: var(--danger); }
+
+/* 表单控件 */
+.form-row { margin-bottom: 10px; }
+.form-label { display: block; font-size: 11px; color: var(--text3); margin-bottom: 4px; }
+.form-input, .form-select {
+  width: 100%; background: var(--bg4); border: 1px solid var(--border2);
+  border-radius: 4px; color: var(--text); padding: 6px 8px;
+  font-size: 12px; font-family: inherit;
+}
+.form-input:focus, .form-select:focus {
+  outline: none; border-color: var(--accent);
+}
+.form-row.two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.inline-radio-group { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+.inline-radio { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text2); cursor:pointer; }
+.factor-pick-panel { max-height:260px; overflow:auto; border:1px solid var(--border); border-radius:6px; background:var(--bg4); padding:8px; }
+.pick-toolbar { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px; font-size:11px; color:var(--text3); }
+.pick-group { border:1px solid var(--border); border-radius:6px; margin-bottom:8px; overflow:hidden; }
+.pick-group summary { cursor:pointer; list-style:none; padding:8px 10px; background:rgba(255,255,255,0.02); color:var(--text2); font-size:12px; user-select:none; }
+.pick-group summary::-webkit-details-marker { display:none; }
+.pick-items { padding:8px 10px; display:flex; flex-direction:column; gap:6px; }
+.pick-check { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--text); }
+.pick-meta { font-size:11px; color:var(--info); }
+
+/* 按钮 */
+.btn {
+  width: 100%; padding: 8px; border-radius: 5px; border: none;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: all 0.15s; font-family: inherit;
+}
+.btn-primary {
+  background: var(--accent); color: #000;
+}
+.btn-primary:hover { background: var(--accent2); }
+.btn-primary:disabled { background: var(--bg4); color: var(--text3); cursor: not-allowed; }
+.btn-ghost {
+  background: transparent; color: var(--text2);
+  border: 1px solid var(--border2);
+}
+.btn-ghost:hover { color: var(--text); border-color: var(--border2); background: var(--bg4); }
+
+/* 进度条 */
+.progress-bar-wrap {
+  height: 10px; background: var(--bg4); border-radius: 5px; overflow: hidden;
+  border: 1px solid var(--border);
+}
+.progress-bar-fill {
+  height: 100%; background: linear-gradient(90deg, var(--accent2), var(--accent));
+  transition: width 0.35s ease; border-radius: 5px;
+  min-width: 0;
+  box-shadow: 0 0 12px rgba(74, 222, 128, 0.35);
+}
+.progress-meta {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 8px; gap: 10px;
+}
+.progress-pct { font-size: 12px; font-weight: 600; color: var(--accent); font-family: var(--font-mono); }
+.progress-text { font-size: 11px; color: var(--text2); flex: 1; text-align: right; }
+
+/* ─── 右侧主区域 ─── */
+.main {
+  flex: 1; overflow-y: auto; padding: 20px 24px;
+  display: flex; flex-direction: column; gap: 20px;
+}
+
+/* Tab 导航 */
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
+.tab-btn {
+  padding: 7px 16px; font-size: 12px; cursor: pointer;
+  color: var(--text3); border-radius: 4px 4px 0 0;
+  border: none; background: none; font-family: inherit;
+  transition: color 0.15s;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
+
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* 汇总表格 */
+.summary-table {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+}
+.summary-table th {
+  padding: 8px 12px; text-align: left; font-weight: 500;
+  color: var(--text3); border-bottom: 1px solid var(--border);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+  cursor: pointer; user-select: none; white-space: nowrap;
+}
+.summary-table th:hover { color: var(--text); }
+.summary-table td {
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  color: var(--text); vertical-align: middle;
+}
+.summary-table tr:hover td { background: var(--bg3); }
+.mono { font-family: var(--font-mono); }
+.pos { color: var(--accent); }
+.neg { color: var(--danger); }
+.neutral { color: var(--text2); }
+
+/* 评分徽章 */
+.grade {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  padding: 2px 7px; border-radius: 3px; font-family: var(--font-mono);
+}
+.grade-Ap { background: rgba(74,222,128,0.15); color: var(--accent); }
+.grade-A  { background: rgba(74,222,128,0.1);  color: var(--accent2); }
+.grade-B  { background: rgba(251,191,36,0.1);  color: var(--warn); }
+.grade-C  { background: rgba(248,113,113,0.1); color: var(--danger); }
+.grade-D  { background: rgba(100,100,100,0.1); color: var(--text3); }
+
+/* 相关性热力图容器 */
+.heatmap-wrap {
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.heatmap-wrap--boxed {
+  max-height: min(62vh, 520px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg2);
+  overscroll-behavior: contain;
+}
+.heatmap-scroll-hint {
+  font-size: 11px;
+  color: var(--text3);
+  margin: 0 0 8px 0;
+}
+.heatmap-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+.heatmap-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg3);
+  z-index: 2;
+}
+.heatmap-table th.heatmap-corner {
+  position: sticky;
+  left: 0;
+  top: 0;
+  z-index: 6;
+  min-width: 72px;
+  background: var(--bg3) !important;
+  box-shadow: 1px 0 0 rgba(255,255,255,0.06), 0 1px 0 rgba(255,255,255,0.06);
+}
+.heatmap-table th.heatmap-row-label {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  background: var(--bg3) !important;
+  text-align: right !important;
+  font-weight: 500;
+  color: var(--text2);
+  min-width: 72px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-shadow: 4px 0 8px -2px rgba(0, 0, 0, 0.35);
+}
+.heatmap-table th {
+  padding: 5px 8px; color: var(--text3); font-weight: 400; white-space: nowrap;
+}
+.heatmap-table td {
+  width: 52px;
+  min-width: 48px;
+  height: 28px;
+  text-align: center;
+  font-weight: 500;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.heatmap-table td:hover {
+  outline: 1px solid rgba(96,165,250,0.65);
+}
+
+/* 新因子 vs 因子库：分块列表，避免整页横向拖动 */
+.vs-lib-matrix {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.vs-lib-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg3);
+  overflow: hidden;
+}
+.vs-lib-card-title {
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+}
+.vs-lib-table-wrap {
+  max-height: 280px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+.vs-lib-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+.vs-lib-table th,
+.vs-lib-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  text-align: left;
+}
+.vs-lib-table th {
+  color: var(--text3);
+  font-weight: 500;
+  position: sticky;
+  top: 0;
+  background: var(--bg4);
+  z-index: 1;
+}
+.vs-lib-table td:last-child {
+  text-align: right;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.vs-lib-table tbody tr:hover td {
+  background: rgba(96, 165, 250, 0.06);
+}
+.vs-lib-raw-matrix {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: var(--bg2);
+}
+.vs-lib-raw-matrix > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text3);
+  user-select: none;
+  list-style: none;
+}
+.vs-lib-raw-matrix > summary::-webkit-details-marker {
+  display: none;
+}
+.vs-lib-raw-matrix[open] > summary {
+  margin-bottom: 8px;
+  color: var(--text2);
+}
+
+/* 警告卡 */
+.warn-card {
+  padding: 10px 14px; border-radius: 5px;
+  border: 1px solid rgba(251,191,36,0.3);
+  background: rgba(251,191,36,0.05);
+  margin-bottom: 8px; font-size: 12px;
+}
+.warn-card .wc-title { color: var(--warn); font-weight: 600; margin-bottom: 3px; }
+.warn-card .wc-body { color: var(--text2); }
+
+/* 因子卡片详情 */
+.factor-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.stat-card {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 6px; padding: 12px;
+}
+.stat-card .sc-label { font-size: 10px; color: var(--text3); margin-bottom: 4px; text-transform: uppercase; }
+.stat-card .sc-value { font-size: 18px; font-weight: 600; font-family: var(--font-mono); }
+.detail-chart-wrap {
+  height: 220px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--bg3);
+}
+.detail-chart-wrap canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* 空状态 */
+.empty-state {
+  text-align: center; padding: 60px 20px; color: var(--text3);
+}
+.empty-state .es-icon { font-size: 36px; margin-bottom: 12px; opacity: 0.4; }
+.empty-state .es-text { font-size: 13px; }
+
+/* Step2 覆盖信息（公共股票/有效天数） */
+.coverage-panel {
+  margin-top: 18px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg3);
+  padding: 12px;
+}
+.coverage-panel .cp-header {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.coverage-panel .cp-title {
+  color: var(--text3);
+  font-size: 12px;
+  font-weight: 600;
+}
+.coverage-panel .cp-select {
+  background: var(--bg4);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.coverage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.coverage-table th,
+.coverage-table td {
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding: 6px 8px;
+  vertical-align: top;
+}
+.coverage-table th {
+  color: var(--text3);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.coverage-table td {
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+</style>
+</head>
+<body>
+<div class="app-container layout">
+
+  <!-- 左侧面板 -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <span class="logo-icon">Q</span>
+        <span class="logo-text">Quant Lab</span>
+      </div>
+      <p class="sidebar-subtitle">GF Securities</p>
+      <p class="sidebar-subtitle" style="margin-top: 10px;">
+        <a href="/" style="color: #7eb8da; text-decoration: none; font-size: 13px;">单因子回测 →</a>
+      </p>
+      <p class="sidebar-subtitle" style="margin-top: 6px;">
+        <a href="/correlation" style="color: #7eb8da; text-decoration: none; font-size: 13px;">因子库相关性分析 →</a>
+      </p>
+    </div>
+
+    <!-- 上传区 -->
+    <div class="panel">
+      <div class="panel-title">上传因子</div>
+      <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+        <div class="upload-icon">📂</div>
+        <div class="upload-hint">点击或拖拽 CSV 文件<br>支持批量上传（宽表格式）</div>
+        <input type="file" id="fileInput" multiple accept=".csv">
+      </div>
+    </div>
+
+    <!-- 已上传因子列表 -->
+    <div class="panel">
+      <div class="panel-title">已上传因子 <span id="factorCount" style="color:var(--accent)">0</span></div>
+      <div id="factorList">
+        <div class="empty-state" style="padding:20px">
+          <div style="color:var(--text3);font-size:12px">暂无因子，请先上传 CSV</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 回测参数 -->
+    <div class="panel">
+      <div class="panel-title">回测参数</div>
+      <div class="form-row two">
+        <div>
+          <div class="form-label">起始日期</div>
+          <input type="text" id="startDate" class="form-input" inputmode="numeric" placeholder="YYYY-MM-DD">
+        </div>
+        <div>
+          <div class="form-label">结束日期</div>
+          <input type="text" id="endDate" class="form-input" inputmode="numeric" placeholder="YYYY-MM-DD">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-label">调仓频率</div>
+        <select id="rebalFreq" class="form-select">
+          <option value="daily">每日</option>
+          <option value="weekly">每周</option>
+          <option value="monthly" selected>每月</option>
+        </select>
+      </div>
+      <div class="form-row two">
+        <div>
+          <div class="form-label">分组数量</div>
+          <select id="nGroups" class="form-select">
+            <option value="5" selected>5 组</option>
+            <option value="10">10 组</option>
+            <option value="20">20 组</option>
+          </select>
+        </div>
+        <div>
+          <div class="form-label">加权方式</div>
+          <select id="weightMethod" class="form-select">
+            <option value="equal" selected>等权</option>
+            <option value="mkt_val">市值加权</option>
+            <option value="factor_score">因子加权</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row two">
+        <div>
+          <div class="form-label">手续费 %</div>
+          <input type="number" id="txCost" class="form-input" value="0.1" step="0.01" min="0">
+        </div>
+        <div>
+          <div class="form-label">滑点 %</div>
+          <input type="number" id="slippage" class="form-input" value="0.05" step="0.01" min="0">
+        </div>
+      </div>
+
+      <!-- 进度 -->
+      <div id="progressWrap" style="display:none;margin-bottom:10px">
+        <div class="progress-bar-wrap">
+          <div class="progress-bar-fill" id="progressFill" style="width:0%"></div>
+        </div>
+        <div class="progress-meta">
+          <span class="progress-pct" id="progressPct">0%</span>
+          <span class="progress-text" id="progressText">等待中…</span>
+        </div>
+      </div>
+
+      <button class="btn btn-primary" id="runBtn" onclick="runBatch()">▶ 开始批量回测</button>
+    </div>
+
+  </aside>
+
+  <!-- 右侧主区域 -->
+  <main class="main main-content">
+
+    <!-- Tab 导航 -->
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('summary')">📊 汇总对比</button>
+      <button class="tab-btn" onclick="switchTab('detail')">🔍 单因子详情</button>
+      <button class="tab-btn" onclick="switchTab('correlation')">🔗 相关性矩阵</button>
+      <button class="tab-btn" onclick="switchTab('score')">⭐ 评分 & 入库</button>
+    </div>
+
+    <!-- Tab: 汇总对比 -->
+    <div class="tab-panel active" id="tab-summary">
+      <div id="summaryContent">
+        <div class="empty-state">
+          <div class="es-icon">📈</div>
+          <div class="es-text">完成批量回测后，这里将展示所有因子的横向对比</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: 单因子详情（DOM 与 main.js / 单因子页一致，复用 renderResults） -->
+    <div class="tab-panel" id="tab-detail">
+      <div style="margin-bottom:14px;display:flex;gap:10px;align-items:center">
+        <select id="detailFactorSelect" class="form-select" style="width:220px" onchange="loadDetail()">
+          <option value="">-- 选择因子 --</option>
+        </select>
+        <span style="color:var(--text3);font-size:11px">展示与单因子回测页相同的分组净值、IC 分析等</span>
+      </div>
+      <div id="detailContent">
+        <div id="detailPlaceholder" class="empty-state">
+          <div class="es-icon">🔍</div>
+          <div class="es-text">选择因子后加载与单因子回测相同的结果视图</div>
+        </div>
+        <div id="mfBacktestSections" style="display:none">
+          <button type="button" id="btn-download-report" style="display:none" aria-hidden="true"></button>
+            <section class="result-section" id="factor-summary-section" style="display: none;">
+                <div class="section-header">
+                    <h2>单因子检测结果</h2>
+                    <p class="section-desc">综合展示因子的预测能力和投资价值，各指标计算说明见下方</p>
+                </div>
+                <div class="metrics-grid">
+                    <div class="metric-card" title="多空组合收益率：做多因子值最高组、做空因子值最低组的年化收益">
+                        <div class="metric-value" id="metric-factor-return">--</div>
+                        <div class="metric-label">因子收益率</div>
+                        <div class="metric-hint">多空组合</div>
+                    </div>
+                    <div class="metric-card" title="最高分组(Top)净值序列的年化夏普比率，衡量风险调整后收益">
+                        <div class="metric-value" id="metric-sharpe">--</div>
+                        <div class="metric-label">夏普比率</div>
+                        <div class="metric-hint">Top组</div>
+                    </div>
+                    <div class="metric-card" title="最高分组(Top)的年化收益率">
+                        <div class="metric-value" id="metric-annual-return">--</div>
+                        <div class="metric-label">年化收益</div>
+                        <div class="metric-hint">Top组</div>
+                    </div>
+                    <div class="metric-card" title="因子值与下期收益的Pearson相关系数均值，衡量因子预测能力">
+                        <div class="metric-value" id="metric-ic">--</div>
+                        <div class="metric-label">IC</div>
+                        <div class="metric-hint">均值</div>
+                    </div>
+                    <div class="metric-card" title="因子值排名与下期收益排名的Spearman相关系数均值，更稳健">
+                        <div class="metric-value" id="metric-rank-ic">--</div>
+                        <div class="metric-label">Rank_IC</div>
+                        <div class="metric-hint">均值</div>
+                    </div>
+                    <div class="metric-card" title="最高分组(Top)净值从峰值到谷底的最大跌幅">
+                        <div class="metric-value" id="metric-max-dd">--</div>
+                        <div class="metric-label">最大回撤</div>
+                        <div class="metric-hint">Top组</div>
+                    </div>
+                </div>
+            </section>
+            <section class="result-section" id="group-analysis-section" style="display: none;">
+                <div class="section-header">
+                    <h2>分组分析</h2>
+                </div>
+                <div class="chart-card full-width">
+                    <div class="card-header">
+                        <h3 id="nav-chart-title">分组净值曲线</h3>
+                        <div class="card-actions">
+                            <div class="toggle-group" id="nav-toggle-group" style="display: none;">
+                                <button class="btn-toggle active" id="btn-absolute-nav" onclick="switchNavView('absolute')">绝对收益</button>
+                                <button class="btn-toggle" id="btn-excess-nav" onclick="switchNavView('excess')">超额收益</button>
+                            </div>
+                            <button class="btn-icon" title="下载数据" onclick="downloadNavData()">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="7 10 12 15 17 10"></polyline>
+                                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="navChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-row">
+                    <div class="chart-card">
+                        <div class="card-header">
+                            <h3>分组统计指标</h3>
+                        </div>
+                        <div class="table-container">
+                            <table id="group-stats-table">
+                                <thead>
+                                    <tr>
+                                        <th>分组</th>
+                                        <th>累计收益%</th>
+                                        <th>年化收益%</th>
+                                        <th>波动率%</th>
+                                        <th>最大回撤%</th>
+                                        <th>夏普</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="group-stats-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="chart-card">
+                        <div class="card-header">
+                            <h3>Long-Short 净值</h3>
+                        </div>
+                        <div class="chart-container small">
+                            <canvas id="longShortChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+                <div class="chart-card full-width">
+                    <div class="card-header">
+                        <h3>分年度统计</h3>
+                    </div>
+                    <div class="table-container">
+                        <table id="yearly-stats-table">
+                            <thead>
+                                <tr>
+                                    <th>年份</th>
+                                    <th>IC</th>
+                                    <th>IC_std</th>
+                                    <th>IR</th>
+                                    <th>平均收益</th>
+                                    <th>交易日数</th>
+                                </tr>
+                            </thead>
+                            <tbody id="yearly-stats-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+            <section class="result-section" id="ic-analysis-section" style="display: none;">
+                <div class="section-header">
+                    <h2>IC 分析</h2>
+                </div>
+                <div class="ic-stats-grid">
+                    <div class="ic-stat-card">
+                        <div class="stat-value" id="ic-win-rate">--</div>
+                        <div class="stat-label">IC胜率</div>
+                    </div>
+                    <div class="ic-stat-card">
+                        <div class="stat-value" id="ic-mean">--</div>
+                        <div class="stat-label">IC均值</div>
+                    </div>
+                    <div class="ic-stat-card">
+                        <div class="stat-value" id="ic-ir">--</div>
+                        <div class="stat-label">ICIR</div>
+                    </div>
+                    <div class="ic-stat-card">
+                        <div class="stat-value" id="ic-t-stat">--</div>
+                        <div class="stat-label">t统计量</div>
+                    </div>
+                    <div class="ic-stat-card">
+                        <div class="stat-value" id="ic-stability">--</div>
+                        <div class="stat-label">稳定性</div>
+                    </div>
+                    <div class="ic-stat-card">
+                        <div class="stat-value" id="ic-skewness">--</div>
+                        <div class="stat-label">偏度</div>
+                    </div>
+                    <div class="ic-stat-card">
+                        <div class="stat-value" id="ic-kurtosis">--</div>
+                        <div class="stat-label">峰度</div>
+                    </div>
+                </div>
+                <div class="ic-charts-grid">
+                    <div class="chart-card">
+                        <div class="card-header">
+                            <h3>IC 衰减图</h3>
+                        </div>
+                        <div class="chart-container small">
+                            <canvas id="icDecayChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="chart-card">
+                        <div class="card-header">
+                            <h3>IC 分布图</h3>
+                        </div>
+                        <div class="chart-container small">
+                            <canvas id="icDistChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="chart-card">
+                        <div class="card-header">
+                            <h3>IC 累计图</h3>
+                        </div>
+                        <div class="chart-container small">
+                            <canvas id="icCumChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="chart-card">
+                        <div class="card-header">
+                            <h3>IC 自相关图</h3>
+                        </div>
+                        <div class="chart-container small">
+                            <canvas id="icAutocorrChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </section>
+            <section class="result-section" id="correlation-section" style="display:none"></section>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: 相关性矩阵 -->
+    <div class="tab-panel" id="tab-correlation">
+      <div class="panel" style="margin-bottom:14px;padding:12px">
+        <div style="margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-ghost" style="width:auto;padding:6px 14px" onclick="loadCorrelation()">计算相关性矩阵</button>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);cursor:pointer">
+            <input type="checkbox" id="includeLibrary" checked onchange="toggleLibraryCompareOptions()"> 与因子库对比
+          </label>
+          <span id="libraryScopeHint" class="pick-meta"></span>
+        </div>
+        <div id="libraryCompareOptions">
+          <div class="form-row">
+            <div class="form-label">库因子对比范围</div>
+            <div class="inline-radio-group">
+              <label class="inline-radio"><input type="radio" name="mfCompareMode" value="all" checked onchange="onMultiFactorCompareModeChange()"> 全部库因子</label>
+              <label class="inline-radio"><input type="radio" name="mfCompareMode" value="category" onchange="onMultiFactorCompareModeChange()"> 某一类因子</label>
+              <label class="inline-radio"><input type="radio" name="mfCompareMode" value="custom" onchange="onMultiFactorCompareModeChange()"> 手动勾选</label>
+            </div>
+          </div>
+          <div class="form-row" id="mfCategoryRow" style="display:none">
+            <div class="form-label">选择类别</div>
+            <select id="mfCompareCategory" class="form-select" onchange="updateLibraryScopeHint()"></select>
+          </div>
+          <div class="form-row" id="mfCustomPickRow" style="display:none">
+            <div class="form-label">选择要对比的库因子</div>
+            <div class="factor-pick-panel">
+              <div class="pick-toolbar">
+                <label class="pick-check"><input type="checkbox" id="mfPickAllBox" onchange="toggleAllMFLibraryFactors(this.checked)"> 全选</label>
+                <span id="mfPickCount">已选 0 个因子</span>
+              </div>
+              <div id="mfFactorPickGroups"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="correlationContent">
+        <div class="empty-state">
+          <div class="es-icon">🔗</div>
+          <div class="es-text">点击上方按钮计算因子间相关性矩阵</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: 评分 & 入库 -->
+    <div class="tab-panel" id="tab-score">
+      <div style="margin-bottom:14px;display:flex;gap:10px;align-items:center">
+        <button class="btn btn-ghost" style="width:auto;padding:6px 14px" onclick="loadScores()">计算综合评分</button>
+        <button class="btn btn-ghost" style="width:auto;padding:6px 14px" onclick="exportResults()">📥 导出 CSV</button>
+        <button class="btn btn-primary" style="width:auto;padding:6px 14px" id="saveLibBtn" onclick="saveToLibrary()" disabled>✅ 入库选中因子</button>
+      </div>
+      <div id="scoreContent">
+        <div class="empty-state">
+          <div class="es-icon">⭐</div>
+          <div class="es-text">完成回测后点击"计算综合评分"</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+// ════════════════════════════════════════════
+// 状态管理
+// ════════════════════════════════════════════
+const mfState = {
+  factors: [],
+  results: [],
+  scores: [],
+  libraryCategories: {},
+  summaryLoaded: false,
+  detailCache: {}, // { [factorName]: detailData }
+};
+
+function formatDateLikeInput(raw) {
+  const digits = String(raw || '').replace(/\D/g, '').slice(0, 8);
+  if (digits.length <= 4) return digits;
+  if (digits.length <= 6) return `${digits.slice(0, 4)}-${digits.slice(4)}`;
+  return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6)}`;
+}
+
+function normalizeDateValue(v) {
+  if (!v) return '';
+  const s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  if (/^\d{8}$/.test(s)) return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  return '';
+}
+
+async function parseJsonSafely(res) {
+  const raw = await res.text();
+  try {
+    return { ok: true, data: JSON.parse(raw), raw };
+  } catch (e) {
+    // 兼容后端偶发输出 NaN/Infinity（Python 允许，JS JSON.parse 不允许）
+    try {
+      const patched = raw
+        .replace(/\b-?Infinity\b/g, 'null')
+        .replace(/\bNaN\b/g, 'null');
+      return { ok: true, data: JSON.parse(patched), raw };
+    } catch (e2) {
+      return { ok: false, error: e2, raw };
+    }
+  }
+}
+
+// ════════════════════════════════════════════
+// Tab 切换
+// ════════════════════════════════════════════
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach((b, i) => {
+    const tabs = ['summary','detail','correlation','score'];
+    b.classList.toggle('active', tabs[i] === name);
+  });
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById(`tab-${name}`).classList.add('active');
+  if (name === 'summary') {
+    if (!mfState.summaryLoaded) void loadSummary();
+  }
+  if (name === 'detail') {
+    const sel = document.getElementById('detailFactorSelect');
+    const ph = document.getElementById('detailPlaceholder');
+    const sec = document.getElementById('mfBacktestSections');
+    if (!sel || !sel.value) {
+      if (ph) {
+        ph.style.display = 'block';
+        ph.className = 'empty-state';
+        ph.innerHTML = '<div class="es-icon">🔍</div><div class="es-text">选择因子后加载与单因子回测相同的结果视图</div>';
+      }
+      if (sec) sec.style.display = 'none';
+      return;
+    }
+    if (sec) sec.style.display = 'block';
+    if (ph) ph.style.display = 'none';
+    if (!mfState.detailCache[sel.value]) void loadDetail();
+    else void loadDetail(false);
+  }
+  if (name === 'correlation') {
+    void ensureLibraryMeta();
+  }
+}
+
+// ════════════════════════════════════════════
+// 上传文件
+// ════════════════════════════════════════════
+const fileInput = document.getElementById('fileInput');
+const uploadZone = document.getElementById('uploadZone');
+
+fileInput.addEventListener('change', e => uploadFiles(e.target.files));
+
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.classList.remove('drag-over');
+  uploadFiles(e.dataTransfer.files);
+});
+
+async function uploadFiles(files) {
+  if (!files.length) return;
+  const fd = new FormData();
+  for (const f of files) fd.append('files[]', f);
+  const res = await fetch('/api/multi_factor/upload', { method: 'POST', body: fd });
+  const data = await res.json();
+  if (data.success) {
+    showToast(`成功上传 ${data.uploaded.length} 个因子`);
+    await refreshFactorList();
+  } else {
+    data.errors.forEach(e => showToast(`${e.file}: ${e.error}`, 'error'));
+  }
+  fileInput.value = '';
+}
+
+async function refreshFactorList() {
+  const res = await fetch('/api/multi_factor/factors');
+  const data = await res.json();
+  mfState.factors = data.factors || [];
+  renderFactorList();
+  document.getElementById('factorCount').textContent = mfState.factors.length;
+  const sel = document.getElementById('detailFactorSelect');
+  sel.innerHTML = '<option value="">-- 选择因子 --</option>' +
+    mfState.factors.map(f => `<option value="${f.name}">${f.name}</option>`).join('');
+}
+
+function renderFactorList() {
+  const el = document.getElementById('factorList');
+  if (!mfState.factors.length) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px;text-align:center;padding:12px">暂无因子</div>';
+    return;
+  }
+  el.innerHTML = mfState.factors.map(f => `
+    <div class="factor-item">
+      <div>
+        <div class="f-name">${f.name}</div>
+        <div class="f-meta">${f.dates}日 × ${f.tickers}股 | ${f.start}~${f.end}</div>
+      </div>
+      <div class="del-btn" onclick="deleteFactor('${f.name}')">×</div>
+    </div>
+  `).join('');
+}
+
+async function deleteFactor(name) {
+  await fetch(`/api/multi_factor/factors/${name}`, { method: 'DELETE' });
+  await refreshFactorList();
+}
+
+async function ensureLibraryMeta() {
+  if (Object.keys(mfState.libraryCategories || {}).length) {
+    updateLibraryScopeHint();
+    return;
+  }
+  const catSel = document.getElementById('mfCompareCategory');
+  const setCatPlaceholder = (text) => {
+    if (catSel) catSel.innerHTML = `<option value="">${escapeHtml(text)}</option>`;
+  };
+  try {
+    let res = await fetch('/api/correlation/library_status');
+    let parsed = await parseJsonSafely(res);
+    if (!parsed.ok) {
+      setCatPlaceholder('无法读取因子库状态');
+      return;
+    }
+    let data = parsed.data;
+
+    if (!data.loaded) {
+      setCatPlaceholder('正在加载因子库…');
+      const rel = await fetch('/api/correlation/reload_library', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const relParsed = await parseJsonSafely(rel);
+      if (!relParsed.ok || !relParsed.data?.success) {
+        const msg = !relParsed.ok ? '因子库接口返回异常' : (relParsed.data?.message || '因子库加载失败');
+        setCatPlaceholder(msg);
+        showToast('因子库未就绪：' + msg + '。也可先打开「因子库相关性分析」页完成加载。', 'error');
+        return;
+      }
+      res = await fetch('/api/correlation/library_status');
+      parsed = await parseJsonSafely(res);
+      if (!parsed.ok) {
+        setCatPlaceholder('加载后仍无法读取状态');
+        return;
+      }
+      data = parsed.data;
+    }
+
+    if (!data.loaded) {
+      setCatPlaceholder('因子库未就绪');
+      showToast('因子库未加载，请检查数据库或先到「因子库相关性分析」页加载。', 'error');
+      return;
+    }
+
+    mfState.libraryCategories = data.categories || {};
+    const fnames = data.factor_names || [];
+    if (!Object.keys(mfState.libraryCategories).length && fnames.length) {
+      mfState.libraryCategories = { 全部因子: fnames };
+    }
+    renderMFLibrarySelector();
+  } catch (e) {
+    setCatPlaceholder('网络错误');
+    showToast(String(e.message || e), 'error');
+  }
+}
+
+function currentMFCompareMode() {
+  return document.querySelector('input[name="mfCompareMode"]:checked')?.value || 'all';
+}
+
+function toggleLibraryCompareOptions() {
+  const on = document.getElementById('includeLibrary').checked;
+  document.getElementById('libraryCompareOptions').style.display = on ? '' : 'none';
+  if (on && !Object.keys(mfState.libraryCategories || {}).length) {
+    void ensureLibraryMeta();
+  }
+  updateLibraryScopeHint();
+}
+
+function onMultiFactorCompareModeChange() {
+  const mode = currentMFCompareMode();
+  document.getElementById('mfCategoryRow').style.display = mode === 'category' ? '' : 'none';
+  document.getElementById('mfCustomPickRow').style.display = mode === 'custom' ? '' : 'none';
+  updateLibraryScopeHint();
+}
+
+function renderMFLibrarySelector() {
+  const cats = mfState.libraryCategories || {};
+  const groups = Object.entries(cats).sort((a, b) => a[0].localeCompare(b[0], 'zh-CN'));
+  if (!groups.length) {
+    document.getElementById('mfCompareCategory').innerHTML =
+      '<option value="">（暂无分类数据，请确认因子库已加载）</option>';
+    document.getElementById('mfFactorPickGroups').innerHTML =
+      '<div style="color:var(--text3);font-size:12px;padding:8px">暂无库因子列表</div>';
+    onMultiFactorCompareModeChange();
+    return;
+  }
+  document.getElementById('mfCompareCategory').innerHTML =
+    groups.map(([cat, items]) => `<option value="${cat}">${cat} (${items.length}个)</option>`).join('');
+  document.getElementById('mfFactorPickGroups').innerHTML = groups.map(([cat, items], idx) => `
+    <details class="pick-group" ${idx < 3 ? 'open' : ''}>
+      <summary>▼ ${cat}（${items.length}个）</summary>
+      <div class="pick-items">
+        ${items.map(name => `
+          <label class="pick-check">
+            <input type="checkbox" class="mf-lib-factor-box" value="${name}" onchange="refreshMFLibraryPickCount()">
+            <span>${name}</span>
+          </label>
+        `).join('')}
+      </div>
+    </details>
+  `).join('');
+  toggleAllMFLibraryFactors(true);
+  onMultiFactorCompareModeChange();
+}
+
+function toggleAllMFLibraryFactors(checked) {
+  document.querySelectorAll('.mf-lib-factor-box').forEach(el => { el.checked = checked; });
+  const allBox = document.getElementById('mfPickAllBox');
+  if (allBox) allBox.checked = checked;
+  refreshMFLibraryPickCount();
+}
+
+function refreshMFLibraryPickCount() {
+  const boxes = [...document.querySelectorAll('.mf-lib-factor-box')];
+  const checked = boxes.filter(el => el.checked).length;
+  document.getElementById('mfPickCount').textContent = `已选 ${checked} 个因子`;
+  const allBox = document.getElementById('mfPickAllBox');
+  if (allBox && boxes.length) {
+    allBox.checked = checked === boxes.length;
+    allBox.indeterminate = checked > 0 && checked < boxes.length;
+  }
+  updateLibraryScopeHint();
+}
+
+function updateLibraryScopeHint() {
+  const el = document.getElementById('libraryScopeHint');
+  const includeLibrary = document.getElementById('includeLibrary')?.checked;
+  if (!el) return;
+  if (!includeLibrary) {
+    el.textContent = '当前仅计算新因子之间的相关性';
+    return;
+  }
+  const mode = currentMFCompareMode();
+  if (mode === 'all') {
+    const total = Object.values(mfState.libraryCategories || {}).reduce((s, arr) => s + arr.length, 0);
+    el.textContent = `当前将对比全部库因子，共 ${total} 个`;
+  } else if (mode === 'category') {
+    const cat = document.getElementById('mfCompareCategory')?.value || '';
+    const count = (mfState.libraryCategories?.[cat] || []).length;
+    el.textContent = `当前仅对比类别「${cat || '未选择'}」，共 ${count} 个`;
+  } else {
+    const count = document.querySelectorAll('.mf-lib-factor-box:checked').length;
+    el.textContent = `当前手动选择了 ${count} 个库因子`;
+  }
+}
+
+// ════════════════════════════════════════════
+// 批量回测
+// ════════════════════════════════════════════
+async function runBatch() {
+  if (!mfState.factors.length) { showToast('请先上传因子 CSV', 'error'); return; }
+
+  // 新一轮回测前清空前端缓存，避免旧结果被复用
+  mfState.summaryLoaded = false;
+  mfState.results = [];
+  mfState.detailCache = {};
+
+  const params = {
+    start_date: document.getElementById('startDate').value || null,
+    end_date: document.getElementById('endDate').value || null,
+    rebalance_freq: document.getElementById('rebalFreq').value,
+    n_groups: +document.getElementById('nGroups').value,
+    weight_method: document.getElementById('weightMethod').value,
+    transaction_cost: +document.getElementById('txCost').value / 100,
+    slippage: +document.getElementById('slippage').value / 100,
+  };
+
+  document.getElementById('runBtn').disabled = true;
+  document.getElementById('progressWrap').style.display = 'block';
+  setProgress(0, '正在连接进度通道…');
+
+  let sseDone = false;
+  const sse = new EventSource('/api/multi_factor/stream_progress');
+  let batchPosted = false;
+
+  const postBatch = async () => {
+    if (batchPosted) return;
+    batchPosted = true;
+    try {
+      const res = await fetch('/api/multi_factor/run_batch', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(params)
+      });
+      const data = await res.json();
+      if (!data.success) {
+        showToast(data.message, 'error');
+        sseDone = true;
+        sse.close();
+        resetRun();
+        return;
+      }
+      setProgress(0, `已启动：共 ${data.total || mfState.factors.length} 个因子，等待执行…`);
+    } catch (err) {
+      showToast('请求失败：' + (err.message || err), 'error');
+      sseDone = true;
+      sse.close();
+      resetRun();
+    }
+  };
+
+  sse.onopen = () => { void postBatch(); };
+  // 若 EventSource 未及时触发 onopen，仍发起回测（服务端已清空旧进度队列）
+  setTimeout(() => { if (!batchPosted) void postBatch(); }, 400);
+
+  sse.onmessage = e => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch (_) { return; }
+    if (msg.type === 'heartbeat') return;
+    if (msg.type === 'started') {
+      setProgress(0, msg.message || '批量回测运行中…');
+      return;
+    }
+    if (msg.type === 'progress') {
+      const t = msg.total || 1;
+      const pct = Math.min(100, Math.round((msg.done / t) * 100));
+      setProgress(pct, `进度 ${msg.done}/${msg.total}：${msg.factor}`);
+    } else if (msg.type === 'done') {
+      sseDone = true;
+      sse.close();
+      setProgress(100, '全部完成！');
+      setTimeout(() => { resetRun(); void loadSummary(); }, 500);
+      // 兜底再拉一次，避免 done 与结果落盘存在轻微时序差
+      setTimeout(() => { void loadSummary(); }, 1500);
+    } else if (msg.type === 'error') {
+      sseDone = true;
+      sse.close();
+      showToast('回测出错：' + msg.message, 'error');
+      resetRun();
+    }
+  };
+
+  sse.onerror = () => {
+    if (sseDone) return;
+    // 浏览器在连接中断时也会触发 error，避免误杀：仅关闭，由 resetRun 在失败路径处理
+  };
+}
+
+function setProgress(pct, text) {
+  pct = Math.max(0, Math.min(100, Math.round(pct)));
+  document.getElementById('progressFill').style.width = pct + '%';
+  const pEl = document.getElementById('progressPct');
+  if (pEl) pEl.textContent = pct + '%';
+  document.getElementById('progressText').textContent = text;
+}
+function resetRun() {
+  document.getElementById('runBtn').disabled = false;
+}
+
+// ════════════════════════════════════════════
+// 汇总表
+// ════════════════════════════════════════════
+async function loadSummary(force = false) {
+  if (!force && mfState.summaryLoaded && mfState.results && mfState.results.length) return;
+  const target = document.getElementById('summaryContent');
+  target.innerHTML = '<div style="color:var(--text3);padding:20px;text-align:center">正在加载汇总结果…</div>';
+  try {
+    const res = await fetch('/api/multi_factor/results');
+    const parsed = await parseJsonSafely(res);
+    if (!parsed.ok) throw new Error(`汇总接口返回非JSON（HTTP ${res.status}）: ${parsed.raw.slice(0, 120)}`);
+    const data = parsed.data;
+    if (!data.success) {
+      target.innerHTML = `<div class="empty-state"><div class="es-icon">⚠️</div><div class="es-text">${data.message || '暂无回测结果'}</div></div>`;
+      return;
+    }
+    mfState.results = data.summary || [];
+    mfState.summaryLoaded = true;
+    renderSummaryTable(mfState.results);
+  } catch (err) {
+    target.innerHTML = `<div class="empty-state"><div class="es-icon">⚠️</div><div class="es-text">${err.message || err}</div></div>`;
+  }
+}
+
+function renderSummaryTable(rows) {
+  if (!rows || !rows.length) {
+    document.getElementById('summaryContent').innerHTML = `
+      <div class="empty-state">
+        <div class="es-icon">📭</div>
+        <div class="es-text">本次批量回测没有可展示结果（可能全部因子失败）。请查看“状态/错误原因”或终端日志。</div>
+      </div>`;
+    return;
+  }
+  const cols = [
+    { key: 'success', label: '状态' },
+    { key: 'factor_name', label: '因子名' },
+    { key: 'ic_mean', label: 'IC均值' },
+    { key: 'icir', label: 'ICIR' },
+    { key: 'ic_win_rate', label: 'IC胜率' },
+    { key: 't_stat', label: 't统计量' },
+    { key: 'rank_ic_mean', label: 'Rank IC' },
+    { key: 'ls_annual_return', label: 'L/S年化' },
+    { key: 'ls_sharpe', label: 'L/S夏普' },
+    { key: 'ls_max_drawdown', label: '最大回撤' },
+    { key: 'elapsed_sec', label: '耗时(s)' },
+    { key: 'error', label: '错误原因' },
+  ];
+
+  let sortKey = 'icir', sortAsc = false;
+
+  const renderRows = () => {
+    const sorted = [...rows].sort((a, b) => {
+      const va = a[sortKey] ?? 0, vb = b[sortKey] ?? 0;
+      return sortAsc ? va - vb : vb - va;
+    });
+    return sorted.map(r => {
+      const cells = cols.map(c => {
+        const v = r[c.key];
+        if (c.key === 'success') {
+          const ok = v === true || v === 'true' || v === 1;
+          return `<td class="mono" style="color:${ok ? 'var(--accent)' : 'var(--danger)'}">${ok ? '成功' : '失败'}</td>`;
+        }
+        if (c.key === 'factor_name') return `<td class="mono" style="color:var(--info)">${v}</td>`;
+        if (c.key === 'error') {
+          if (!v) return `<td class="neutral">—</td>`;
+          const txt = String(v);
+          const short = txt.length > 40 ? (txt.slice(0, 40) + '…') : txt;
+          return `<td title="${txt.replace(/\"/g,'&quot;')}" style="color:var(--warn);font-size:11px">${short}</td>`;
+        }
+        if (typeof v !== 'number') return `<td class="neutral">—</td>`;
+        // 汇总表使用与单因子详情相同的百分比展示逻辑（避免“已是百分数/又乘100”的双重换算）
+        const fmted = c.key.includes('rate') || c.key.includes('return') || c.key === 'ls_max_drawdown'
+          ? pct2(v)
+          : v.toFixed(4);
+        const cls = v > 0 && !c.key.includes('drawdown') ? 'pos' : v < 0 ? 'neg' : 'neutral';
+        return `<td class="mono ${cls}">${fmted}</td>`;
+      }).join('');
+      return `<tr onclick="selectFactor('${r.factor_name}')" style="cursor:pointer">${cells}</tr>`;
+    }).join('');
+  };
+
+  document.getElementById('summaryContent').innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-size:12px;color:var(--text3)">${rows.length} 个因子回测完成</div>
+      <button class="btn btn-ghost" style="width:auto;padding:5px 12px;font-size:11px" onclick="exportResults()">导出</button>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="summary-table" id="summaryTbl">
+        <thead><tr>${cols.map(c =>
+          `<th onclick="sortTable('${c.key}')">${c.label} <span style="color:var(--text3);font-size:10px">↕</span></th>`
+        ).join('')}</tr></thead>
+        <tbody id="summaryBody">${renderRows()}</tbody>
+      </table>
+    </div>`;
+
+  window.sortTable = k => {
+    if (sortKey === k) sortAsc = !sortAsc;
+    else { sortKey = k; sortAsc = false; }
+    document.getElementById('summaryBody').innerHTML = renderRows();
+  };
+}
+
+function selectFactor(name) {
+  document.getElementById('detailFactorSelect').value = name;
+  switchTab('detail');
+  // 由 switchTab('detail') 决定是否走缓存渲染或重新拉取
+}
+
+// ════════════════════════════════════════════
+// 单因子详情（数据结构对齐 /api/run_backtest_db，复用 main.js renderResults）
+// ════════════════════════════════════════════
+async function loadDetail(force = false) {
+  const name = document.getElementById('detailFactorSelect').value;
+  const ph = document.getElementById('detailPlaceholder');
+  const sec = document.getElementById('mfBacktestSections');
+  if (!name) {
+    if (ph) {
+      ph.style.display = 'block';
+      ph.className = 'empty-state';
+      ph.innerHTML = '<div class="es-icon">🔍</div><div class="es-text">选择因子后加载与单因子回测相同的结果视图</div>';
+    }
+    if (sec) sec.style.display = 'none';
+    return;
+  }
+
+  if (!force && mfState.detailCache && mfState.detailCache[name]) {
+    if (ph) ph.style.display = 'none';
+    if (sec) sec.style.display = 'block';
+    state.results = mfState.detailCache[name];
+    if (typeof renderResults === 'function') renderResults(mfState.detailCache[name]);
+    else showToast('结果渲染脚本未加载', 'error');
+    return;
+  }
+
+  if (ph) {
+    ph.style.display = 'block';
+    ph.className = 'empty-state';
+    ph.innerHTML = `<div class="es-icon">⏳</div><div class="es-text">正在加载 ${name} …</div>`;
+  }
+  if (sec) sec.style.display = 'none';
+
+  try {
+    const res = await fetch(`/api/multi_factor/results?factor=${encodeURIComponent(name)}&format=detail`);
+    const parsed = await parseJsonSafely(res);
+    if (!parsed.ok) throw new Error(`详情接口返回非JSON（HTTP ${res.status}）: ${parsed.raw.slice(0, 120)}`);
+    const wrap = parsed.data;
+    if (!wrap.success || !wrap.data || Object.keys(wrap.data).length === 0) {
+      const msg = wrap.error || wrap.message || '该因子暂无可展示结果';
+      if (ph) {
+        ph.style.display = 'block';
+        ph.innerHTML = `<div class="es-icon">⚠️</div><div class="es-text">${msg}</div>`;
+      }
+      return;
+    }
+    const d = wrap.data;
+    mfState.detailCache = mfState.detailCache || {};
+    mfState.detailCache[name] = d;
+    if (ph) ph.style.display = 'none';
+    if (sec) sec.style.display = 'block';
+    state.results = d;
+    if (typeof renderResults === 'function') renderResults(d);
+    else showToast('结果渲染脚本未加载', 'error');
+  } catch (err) {
+    if (ph) {
+      ph.style.display = 'block';
+      ph.innerHTML = `<div class="es-icon">⚠️</div><div class="es-text">${err.message || err}</div>`;
+    }
+    if (sec) sec.style.display = 'none';
+  }
+}
+
+// ════════════════════════════════════════════
+// 相关性矩阵
+// ════════════════════════════════════════════
+function correlationCellBg(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 'transparent';
+  const a = Math.abs(n);
+  if (a >= 0.8) return n > 0 ? 'rgba(74,222,128,0.35)' : 'rgba(248,113,113,0.35)';
+  if (a >= 0.5) return n > 0 ? 'rgba(74,222,128,0.18)' : 'rgba(248,113,113,0.18)';
+  if (a >= 0.3) return 'rgba(251,191,36,0.12)';
+  return 'transparent';
+}
+
+/** 新因子 × 因子库：按新因子分块、|ρ| 降序，避免整页左右拖动 */
+function renderVsLibraryCorrelationBlocks(newFactors, matrix, libraryFactors) {
+  let html = `
+    <div style="font-size:12px;color:var(--text2);margin-bottom:6px;font-weight:600">新因子 vs 因子库</div>
+    <p class="heatmap-scroll-hint" style="margin-top:0">按新因子分块展示；各块内按相关系数绝对值从高到低排列，无需横向滑动。</p>
+    <div class="vs-lib-matrix">`;
+  newFactors.forEach((nf, i) => {
+    const row = matrix[i] || [];
+    const pairs = libraryFactors
+      .map((lf, j) => ({ lf, v: Number(row[j]) }))
+      .filter((p) => Number.isFinite(p.v))
+      .sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
+    const rows = pairs.map((p) => {
+      const fg = Math.abs(p.v) > 0.5 ? 'var(--text)' : 'var(--text2)';
+      return `<tr><td>${escapeHtml(p.lf)}</td><td style="background:${correlationCellBg(p.v)};color:${fg}">${p.v.toFixed(2)}</td></tr>`;
+    }).join('');
+    html += `
+      <section class="vs-lib-card">
+        <div class="vs-lib-card-title">${escapeHtml(nf)}</div>
+        <div class="vs-lib-table-wrap">
+          <table class="vs-lib-table">
+            <thead><tr><th>库因子</th><th>相关系数 ρ</th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="2" style="color:var(--text3)">无数据</td></tr>'}</tbody>
+          </table>
+        </div>
+      </section>`;
+  });
+  html += '</div>';
+  return html;
+}
+
+async function loadCorrelation() {
+  const includeLibrary = document.getElementById('includeLibrary').checked;
+  document.getElementById('correlationContent').innerHTML = '<div style="color:var(--text3);padding:20px;text-align:center">计算中…</div>';
+  let data = null;
+  try {
+    const body = { include_library: includeLibrary };
+    if (includeLibrary) {
+      const mode = currentMFCompareMode();
+      if (mode === 'category') {
+        body.library_factor_names = mfState.libraryCategories[document.getElementById('mfCompareCategory').value] || [];
+      } else if (mode === 'custom') {
+        body.library_factor_names = [...document.querySelectorAll('.mf-lib-factor-box:checked')].map(el => el.value);
+      }
+    }
+    const res = await fetch('/api/multi_factor/correlation_matrix', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    const parsed = await parseJsonSafely(res);
+    if (!parsed.ok) throw new Error(`相关性接口返回非JSON（HTTP ${res.status}）: ${parsed.raw.slice(0, 120)}`);
+    data = parsed.data;
+  } catch (err) {
+    document.getElementById('correlationContent').innerHTML = `<div class="empty-state"><div class="es-icon">⚠️</div><div class="es-text">${err.message || err}</div></div>`;
+    return;
+  }
+  if (!data.success) {
+    document.getElementById('correlationContent').innerHTML = `<div class="empty-state"><div class="es-icon">⚠️</div><div class="es-text">${data.message || '计算失败'}</div></div>`;
+    return;
+  }
+
+  const mat = data.new_factor_matrix;
+  const warnings = mat.high_corr_pairs || [];
+
+  let html = '';
+  if (warnings.length) {
+    html += warnings.map(w => `
+      <div class="warn-card">
+        <div class="wc-title">⚠️ 高度相关预警</div>
+        <div class="wc-body">${w.factor_a} × ${w.factor_b}：均值相关系数 = ${w.mean_corr}（阈值 0.7）— ${w.warning}</div>
+      </div>`).join('');
+  }
+  html += renderHeatmap(mat.factor_names, mat.matrix, '新因子相关矩阵');
+
+  if (data.vs_library && data.vs_library.matrix.length) {
+    const vl = data.vs_library;
+    html += '<div style="margin-top:20px">';
+    html += renderVsLibraryCorrelationBlocks(vl.new_factors, vl.matrix, vl.library_factors);
+    html += `<details class="vs-lib-raw-matrix"><summary>展开传统热力矩阵（列多时需在框内横向滚动）</summary><div>`;
+    html += renderHeatmap(vl.new_factors, vl.matrix, '新因子 vs 因子库（矩阵视图）', vl.library_factors);
+    html += '</div></details>';
+    const libWarns = vl.high_corr_warnings || [];
+    if (libWarns.length) {
+      html += libWarns.map(w => `<div class="warn-card" style="margin-top:8px">
+        <div class="wc-title">⚠️ 与库因子高度相关</div>
+        <div class="wc-body">${w.new_factor} vs ${w.library_factor}：${w.mean_corr} — ${w.suggestion}</div>
+      </div>`).join('');
+    }
+    html += '</div>';
+  }
+
+  if (data.vs_library && data.vs_library.step2_details && Object.keys(data.vs_library.step2_details).length) {
+    window.__step2_details = data.vs_library.step2_details;
+    const first = Object.keys(window.__step2_details)[0];
+    html += renderStep2CoveragePanel(first);
+  }
+
+  document.getElementById('correlationContent').innerHTML = html;
+
+  // 渲染 Step2 覆盖明细的默认下拉项
+  if (window.__step2_details && Object.keys(window.__step2_details).length) {
+    const first = Object.keys(window.__step2_details)[0];
+    renderStep2DetailsForFactor(first);
+  }
+}
+
+function renderHeatmap(rowNames, matrix, title, colNames = null) {
+  const cols = colNames || rowNames;
+  const hint =
+    cols.length > 5 || rowNames.length > 6
+      ? '<p class="heatmap-scroll-hint">因子较多时可在下方区域内滚动查看；左侧首列为因子名（随横向滚动保持可见）。</p>'
+      : '';
+  const cellHtml = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) {
+      return '<td style="color:var(--text3)">—</td>';
+    }
+    const fg = Math.abs(n) > 0.5 ? 'var(--text)' : 'var(--text2)';
+    return `<td style="background:${correlationCellBg(n)};color:${fg}">${n.toFixed(2)}</td>`;
+  };
+  return `
+    <div style="font-size:12px;color:var(--text2);margin-bottom:8px;font-weight:600">${escapeHtml(title)}</div>
+    ${hint}
+    <div class="heatmap-wrap heatmap-wrap--boxed">
+      <table class="heatmap-table">
+        <thead><tr><th class="heatmap-corner"></th>${cols
+          .map((c) => `<th>${escapeHtml(c)}</th>`)
+          .join('')}</tr></thead>
+        <tbody>${rowNames
+          .map((r, i) => {
+            const row = matrix[i] || [];
+            const cells = cols.map((_, j) => cellHtml(row[j]));
+            return `<tr><th class="heatmap-row-label" title="${escapeHtml(r)}">${escapeHtml(r)}</th>${cells.join('')}</tr>`;
+          })
+          .join('')}</tbody>
+      </table>
+    </div>`;
+}
+
+function escapeHtml(v) {
+  return String(v ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function fmtMaybeNumber(v, digits = 2) {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return '—';
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(digits) : '—';
+}
+
+function renderStep2CoveragePanel(defaultFactor) {
+  const step2 = window.__step2_details || {};
+  const factors = Object.keys(step2);
+  const options = factors.map(f => `<option value="${String(f)}" ${f === defaultFactor ? 'selected' : ''}>${escapeHtml(f)}</option>`).join('');
+
+  return `
+    <div class="coverage-panel">
+      <div class="cp-header">
+        <div>
+          <div class="cp-title">Step2 样本覆盖（公共股票/有效天数）</div>
+          <div style="color:var(--text2);font-size:12px;margin-top:2px">展示高相关配对的公共股票数和IC有效天数</div>
+        </div>
+        <select class="cp-select" id="cpFactorSelect" onchange="renderStep2DetailsForFactor(this.value)">
+          ${options}
+        </select>
+      </div>
+      <div id="cpDetails"></div>
+    </div>
+  `;
+}
+
+function renderStep2DetailsForFactor(newFactor) {
+  const step2 = window.__step2_details || {};
+  const pairs = step2[newFactor] || [];
+  const top = pairs.slice(0, 18);
+
+  const rows = top.map(p => `
+    <tr>
+      <td>${escapeHtml(p.lib_factor)}</td>
+      <td>${fmtMaybeNumber(p.cross_corr, 2)}</td>
+      <td>${fmtMaybeNumber(p.ic_corr, 2)}</td>
+      <td>${escapeHtml(p.common_tickers ?? '—')}</td>
+      <td>${escapeHtml(p.common_dates ?? '—')}</td>
+      <td>${escapeHtml(p.valid_days ?? '—')}</td>
+      <td style="color:var(--text2)">${escapeHtml(p.insufficient_reason || (p.is_redundant ? '冗余预警' : ''))}</td>
+    </tr>
+  `).join('');
+
+  document.getElementById('cpDetails').innerHTML = `
+    <table class="coverage-table">
+      <thead>
+        <tr>
+          <th>库因子</th>
+          <th>截面相关</th>
+          <th>IC相关</th>
+          <th>公共股票</th>
+          <th>公共日期</th>
+          <th>有效天数</th>
+          <th>备注</th>
+        </tr>
+      </thead>
+      <tbody>${rows || `<tr><td colspan="7" style="color:var(--text2);text-align:center;padding:12px">暂无明细</td></tr>`}</tbody>
+    </table>
+  `;
+}
+
+// ════════════════════════════════════════════
+// 评分 & 入库
+// ════════════════════════════════════════════
+async function loadScores() {
+  try {
+    const res = await fetch('/api/multi_factor/score');
+    const parsed = await parseJsonSafely(res);
+    if (!parsed.ok) throw new Error(parsed.error?.message || parsed.error || 'score接口返回非JSON');
+    const data = parsed.data;
+    if (!data.success) { showToast(data.message || '计算综合评分失败', 'error'); return; }
+    mfState.scores = data.scores || [];
+    renderScores(mfState.scores);
+  } catch (err) {
+    console.error('[loadScores]', err);
+    showToast(err.message || String(err), 'error');
+  }
+}
+
+function renderScores(scores) {
+  if (!scores.length) return;
+  document.getElementById('saveLibBtn').disabled = false;
+  document.getElementById('scoreContent').innerHTML = `
+    <table class="summary-table">
+      <thead><tr>
+        <th><input type="checkbox" id="chkAll" onchange="toggleAllCheck(this.checked)"> 全选</th>
+        <th>因子</th><th>综合分</th><th>评级</th><th>IC均值</th><th>ICIR</th><th>L/S夏普</th><th>建议</th>
+      </tr></thead>
+      <tbody>${scores.map(s => `
+        <tr>
+          <td><input type="checkbox" class="score-chk" value="${s.factor_name}"></td>
+          <td class="mono" style="color:var(--info)">${s.factor_name}</td>
+          <td class="mono pos">${s.total_score}</td>
+          <td><span class="grade grade-${s.grade.replace('+','Ap')}">${s.grade}</span></td>
+          <td class="mono">${fmt4(s.details?.find(d=>d.dimension==='IC均值')?.raw_value)}</td>
+          <td class="mono">${fmt4(s.details?.find(d=>d.dimension==='ICIR')?.raw_value)}</td>
+          <td class="mono">${fmt4(s.details?.find(d=>d.dimension==='L/S夏普')?.raw_value)}</td>
+          <td style="color:var(--text3);font-size:11px">${s.recommendation}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+function toggleAllCheck(checked) {
+  document.querySelectorAll('.score-chk').forEach(c => c.checked = checked);
+}
+
+async function saveToLibrary() {
+  const names = [...document.querySelectorAll('.score-chk:checked')].map(c => c.value);
+  if (!names.length) { showToast('请先勾选要入库的因子', 'error'); return; }
+  const res = await fetch('/api/multi_factor/save_to_library', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ factor_names: names })
+  });
+  const data = await res.json();
+  showToast(data.message, data.success ? 'ok' : 'error');
+}
+
+async function exportResults() {
+  window.location.href = '/api/multi_factor/export';
+}
+
+// ════════════════════════════════════════════
+// 工具函数
+// ════════════════════════════════════════════
+function toNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function fmt4(v) {
+  const n = toNum(v);
+  return n == null ? '—' : n.toFixed(4);
+}
+function pct2(v) {
+  const n = toNum(v);
+  if (n == null) return '—';
+  const pct = Math.abs(n) > 2 ? n : n * 100;
+  return pct.toFixed(2) + '%';
+}
+
+function showToast(msg, type = 'ok') {
+  const el = document.createElement('div');
+  el.style.cssText = `
+    position:fixed;bottom:24px;right:24px;z-index:9999;
+    padding:10px 16px;border-radius:6px;font-size:12px;
+    background:${type==='error'?'#3a1818':type==='ok'?'#0f2a1a':'#1a1a0a'};
+    color:${type==='error'?'#f87171':type==='ok'?'#4ade80':'#fbbf24'};
+    border:1px solid ${type==='error'?'#5a2020':type==='ok'?'#1a4a2a':'#3a3010'};
+  `;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+// ════════════════════════════════════════════
+// 初始化
+// ════════════════════════════════════════════
+(async () => {
+  const startEl = document.getElementById('startDate');
+  const endEl = document.getElementById('endDate');
+  [startEl, endEl].forEach(el => {
+    if (!el) return;
+    el.addEventListener('input', () => { el.value = formatDateLikeInput(el.value); });
+    el.addEventListener('blur', () => {
+      const normalized = normalizeDateValue(el.value);
+      if (el.value && !normalized) {
+        showToast('日期格式请填写为 YYYY-MM-DD', 'error');
+        return;
+      }
+      el.value = normalized;
+    });
+  });
+
+  await refreshFactorList();
+  await ensureLibraryMeta();
+  toggleLibraryCompareOptions();
+  // 设置默认日期
+  const rangeRes = await fetch('/api/data_range').catch(() => null);
+  if (rangeRes?.ok) {
+    const d = await rangeRes.json();
+    const minDate = d?.data?.min_date || '';
+    const maxDate = d?.data?.max_date || '';
+    if (minDate) document.getElementById('startDate').value = normalizeDateValue(minDate);
+    if (maxDate) document.getElementById('endDate').value = normalizeDateValue(maxDate);
+  }
+})();
+</script>
+<script src="{{ url_for('static', filename='chart.min.js') }}"></script>
+<script src="{{ url_for('static', filename='main.js') }}"></script>
+</body>
+</html>
