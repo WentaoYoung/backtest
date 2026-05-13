@@ -5,12 +5,17 @@ from typing import Callable, FrozenSet, List, Optional, Tuple
 
 import duckdb
 import pandas as pd
+import pyarrow.parquet as pq
 
 from data.date_params import coerce_yyyy_mm_dd
 
-# parquet 列集合缓存：(规范化键, mtime) -> 列名，避免每次 DESCRIBE
+# parquet 列集合缓存：(规范化键, mtime) -> 列名，避免每次 DESCRIBE / read_schema
 _PARQUET_COLS_CACHE: dict[str, Tuple[float, FrozenSet[str]]] = {}
 _PARQUET_COLS_LOCK = threading.Lock()
+
+# 单文件 factors_all.parquet 全表缓存：(规范化路径, mtime) -> DataFrame
+_SINGLE_PARQUET_FULL_CACHE: dict[str, Tuple[float, pd.DataFrame]] = {}
+_SINGLE_PARQUET_FULL_LOCK = threading.Lock()
 
 
 class BaseFactorRepository(ABC):
@@ -128,18 +133,49 @@ class DuckDBFactorRepository(BaseFactorRepository):
         return f"read_parquet('{esc}')"
 
     def _columns_for_plan(
-        self, con: duckdb.DuckDBPyConnection, mode: str, path_for_sql: str, cache_key: str, cache_mtime: float
+        self,
+        con: Optional[duckdb.DuckDBPyConnection],
+        mode: str,
+        path_for_sql: str,
+        cache_key: str,
+        cache_mtime: float,
     ) -> FrozenSet[str]:
         with _PARQUET_COLS_LOCK:
             hit = _PARQUET_COLS_CACHE.get(cache_key)
             if hit is not None and hit[0] == cache_mtime:
                 return hit[1]
-        expr = self._read_parquet_expr(mode, path_for_sql)
-        schema_df = con.execute(f"DESCRIBE SELECT * FROM {expr}").df()
-        cols = frozenset(schema_df["column_name"].astype(str).tolist())
+        if mode == "single":
+            fs_path = os.path.normpath(path_for_sql.replace("/", os.sep))
+            schema = pq.read_schema(fs_path)
+            cols = frozenset(schema.names)
+        else:
+            if con is None:
+                raise RuntimeError("DuckDB connection required for hive parquet column discovery")
+            expr = self._read_parquet_expr(mode, path_for_sql)
+            schema_df = con.execute(f"DESCRIBE SELECT * FROM {expr}").df()
+            cols = frozenset(schema_df["column_name"].astype(str).tolist())
         with _PARQUET_COLS_LOCK:
             _PARQUET_COLS_CACHE[cache_key] = (cache_mtime, cols)
         return cols
+
+    @staticmethod
+    def _read_single_parquet_full_dataframe(path_posix: str) -> pd.DataFrame:
+        """单文件 factors_all.parquet：pq.read_table -> to_pandas（带 mtime 缓存）。"""
+        fs_path = os.path.normpath(path_posix.replace("/", os.sep))
+        cache_path = os.path.normcase(os.path.abspath(fs_path))
+        try:
+            mt = os.path.getmtime(fs_path)
+        except OSError:
+            mt = -1.0
+        with _SINGLE_PARQUET_FULL_LOCK:
+            hit = _SINGLE_PARQUET_FULL_CACHE.get(cache_path)
+            if hit is not None and hit[0] == mt:
+                return hit[1]
+        table = pq.read_table(fs_path)
+        df = table.to_pandas()
+        with _SINGLE_PARQUET_FULL_LOCK:
+            _SINGLE_PARQUET_FULL_CACHE[cache_path] = (mt, df)
+        return df
 
     @staticmethod
     def _partition_prune_sql_and_params(
@@ -193,9 +229,10 @@ class DuckDBFactorRepository(BaseFactorRepository):
         ed = coerce_yyyy_mm_dd(end_date)
 
         mode, path_sql, cache_key, cache_mtime = plan
-        con = None
+        con: Optional[duckdb.DuckDBPyConnection] = None
         try:
-            con = duckdb.connect(database=":memory:")
+            if mode == "hive":
+                con = duckdb.connect(database=":memory:")
             available_cols = self._columns_for_plan(con, mode, path_sql, cache_key, cache_mtime)
             available_set = set(available_cols)
 
@@ -212,6 +249,25 @@ class DuckDBFactorRepository(BaseFactorRepository):
                 print(f"[DuckDB] 本地文件缺少必要列(ticker/trade_dt): {label}")
                 return None
 
+            if mode == "single":
+                full_df = self._read_single_parquet_full_dataframe(path_sql)
+                factor_df = full_df[[ticker_col, "trade_dt", factor_name]].copy()
+                factor_df = factor_df.rename(columns={ticker_col: "ticker", factor_name: "factor_value"})
+                factor_df = factor_df[factor_df["factor_value"].notna()]
+                if sd:
+                    factor_df = factor_df[pd.to_datetime(factor_df["trade_dt"]) >= pd.to_datetime(sd)]
+                if ed:
+                    factor_df = factor_df[pd.to_datetime(factor_df["trade_dt"]) <= pd.to_datetime(ed)]
+                if factor_df.empty:
+                    return factor_df
+                factor_df["trade_dt"] = pd.to_datetime(factor_df["trade_dt"])
+                factor_df["ticker"] = factor_df["ticker"].astype(str).str.upper()
+                src = os.path.basename(path_sql)
+                print(f"[DuckDB] 本地读取成功: {factor_name}, {len(factor_df)} 条 ({src})")
+                return factor_df
+
+            if con is None:
+                con = duckdb.connect(database=":memory:")
             from_expr = self._read_parquet_expr(mode, path_sql)
             prune_sql, prune_params = self._partition_prune_sql_and_params(
                 available_cols, sd, ed
@@ -270,9 +326,10 @@ class DuckDBFactorRepository(BaseFactorRepository):
         ed = coerce_yyyy_mm_dd(end_date)
 
         mode, path_sql, cache_key, cache_mtime = plan
-        con = None
+        con: Optional[duckdb.DuckDBPyConnection] = None
         try:
-            con = duckdb.connect(database=":memory:")
+            if mode == "hive":
+                con = duckdb.connect(database=":memory:")
             available_cols = self._columns_for_plan(con, mode, path_sql, cache_key, cache_mtime)
             available_set = set(available_cols)
 
@@ -298,6 +355,31 @@ class DuckDBFactorRepository(BaseFactorRepository):
             if progress_callback:
                 progress_callback({"progress": 5.0, "stage": "DuckDB读取", "detail": "开始读取本地Parquet"})
 
+            if mode == "single":
+                full_df = self._read_single_parquet_full_dataframe(path_sql)
+                cols = [ticker_col, "trade_dt"] + available_factors
+                df = full_df[cols].copy()
+                nn = df[available_factors].notna().any(axis=1)
+                df = df[nn]
+                if sd:
+                    df = df[pd.to_datetime(df["trade_dt"]) >= pd.to_datetime(sd)]
+                if ed:
+                    df = df[pd.to_datetime(df["trade_dt"]) <= pd.to_datetime(ed)]
+                if df.empty:
+                    return df
+                if progress_callback:
+                    progress_callback({"progress": 90.0, "stage": "DuckDB读取", "detail": f"已读取 {len(df)} 行"})
+                df["trade_dt"] = pd.to_datetime(df["trade_dt"])
+                df = df.rename(columns={ticker_col: "ticker"})
+                df["ticker"] = df["ticker"].astype(str).str.upper()
+                if progress_callback:
+                    progress_callback({"progress": 100.0, "stage": "DuckDB读取", "detail": "本地Parquet读取完成"})
+                src = os.path.basename(path_sql)
+                print(f"[DuckDB] 本地多因子读取成功: {len(df)} 条 ({src})")
+                return df
+
+            if con is None:
+                con = duckdb.connect(database=":memory:")
             from_expr = self._read_parquet_expr(mode, path_sql)
             prune_sql, prune_params = self._partition_prune_sql_and_params(
                 available_cols, sd, ed

@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import duckdb
 import pandas as pd
+import pyarrow.parquet as pq
 
 from data.date_params import coerce_yyyy_mm_dd
 
@@ -73,16 +74,18 @@ class LocalParquetFactorDatabase:
         with self._lock:
             if self._full_long is not None:
                 return self._full_long
-            esc = path_sql.replace("'", "''")
             if mode == "hive":
+                esc = path_sql.replace("'", "''")
                 expr = f"read_parquet('{esc}', hive_partitioning = true)"
+                con = duckdb.connect(database=":memory:")
+                try:
+                    df = con.execute(f"SELECT * FROM {expr}").df()
+                finally:
+                    con.close()
             else:
-                expr = f"read_parquet('{esc}')"
-            con = duckdb.connect(database=":memory:")
-            try:
-                df = con.execute(f"SELECT * FROM {expr}").df()
-            finally:
-                con.close()
+                fs_path = os.path.normpath(path_sql.replace("/", os.sep))
+                table = pq.read_table(fs_path)
+                df = table.to_pandas()
             if "s_info_windcode" in df.columns and "ticker" not in df.columns:
                 df = df.rename(columns={"s_info_windcode": "ticker"})
             df["trade_dt"] = pd.to_datetime(df["trade_dt"])
