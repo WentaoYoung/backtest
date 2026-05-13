@@ -47,6 +47,74 @@ _analysis_cache_store: dict[tuple[str, ...], LibraryCache] = {}
 _WARMUP_BATCH_SIZE = 24
 
 
+def _library_calendar_bounds() -> tuple[str | None, str | None]:
+    """
+    因子库实际 trade_dt 范围，用于与「上传新因子推断的裁剪区间」求交。
+    优先用启动时已注入的 LibraryCache（无额外 IO）；否则回退 LocalParquetFactorDatabase。
+    """
+    global _library_cache
+    if _library_cache is not None and getattr(_library_cache, "wide", None):
+        for df in _library_cache.wide.values():
+            if df is None or df.empty:
+                continue
+            idx = pd.to_datetime(df.index, errors="coerce").dropna()
+            if len(idx) == 0:
+                continue
+            return idx.min().strftime("%Y-%m-%d"), idx.max().strftime("%Y-%m-%d")
+    try:
+        from data.db_connector import get_factor_database
+
+        return get_factor_database().get_date_range()
+    except Exception:
+        logger.exception("读取因子库日历范围失败")
+        return None, None
+
+
+def _clamp_library_load_bounds(
+    lib_start: str | None,
+    lib_end: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    """
+    将上传新因子推断的 [lib_start, lib_end] 与因子库 parquet 实际日历求交，
+    避免「上传区间落在库外」导致裁剪后读库为空，却显示失败 0 条。
+
+    返回 (eff_start, eff_end, err400)。err400 非空表示与因子库完全无交集，应直接 400。
+    """
+    if lib_start is None or lib_end is None:
+        return lib_start, lib_end, None
+
+    data_lo, data_hi = _library_calendar_bounds()
+    if not data_lo or not data_hi:
+        return lib_start, lib_end, None
+
+    try:
+        us, ue = pd.Timestamp(lib_start), pd.Timestamp(lib_end)
+        ds, de = pd.Timestamp(data_lo), pd.Timestamp(data_hi)
+    except Exception:
+        return lib_start, lib_end, None
+
+    lo, hi = max(us, ds), min(ue, de)
+    if lo > hi:
+        return (
+            lib_start,
+            lib_end,
+            f"上传因子推断的日期区间（约 {lib_start}～{lib_end}）与本地因子库 "
+            f"（factors_all.parquet）日历（{data_lo}～{data_hi}）无交集，无法加载库因子对比。"
+            f"请核对上传 CSV 的 trade_dt 是否在因子库覆盖范围内，或更新 parquet。",
+        )
+
+    ns, ne = lo.strftime("%Y-%m-%d"), hi.strftime("%Y-%m-%d")
+    if ns != lib_start or ne != lib_end:
+        logger.info(
+            "相关性分析：库因子读取区间已与因子库日历求交：%s～%s → %s～%s",
+            lib_start,
+            lib_end,
+            ns,
+            ne,
+        )
+    return ns, ne, None
+
+
 def _new_factors_to_library_date_bounds(
     new_factors: dict[str, pd.DataFrame],
     future_days: int,
@@ -577,9 +645,13 @@ def analyze():
     cache_misses = 0
 
     lib_start, lib_end = _new_factors_to_library_date_bounds(new_factors, future_days)
+    lib_start, lib_end, bounds_err = _clamp_library_load_bounds(lib_start, lib_end)
+    if bounds_err:
+        return jsonify({"success": False, "message": bounds_err}), 400
+
     if lib_start and lib_end:
         logger.info(
-            "相关性分析：库因子读取裁剪区间 ~ %s .. %s（来自上传因子日历）",
+            "相关性分析：库因子读取裁剪区间 ~ %s .. %s（与因子库日历求交后，用于 parquet 裁剪）",
             lib_start,
             lib_end,
         )
@@ -644,12 +716,17 @@ def analyze():
     if not selected_wide:
         failed_names = [x.get("factor") for x in load_errors if x.get("factor")]
         failed_preview = "、".join(failed_names[:10]) if failed_names else "无"
+        hint = (
+            "常见原因：① 所选因子名与 parquet 列名不一致；② 日期裁剪后该因子在区间内全为缺失；"
+            "③ 长表列名异常（库侧需 trade_dt + ticker/s_info_windcode）。"
+            "注意：factors_all 中 trade_dt 为普通列即可，分析时会 pivot 为宽表索引，与是否为 index 无关。"
+        )
         return jsonify({
             "success": False,
             "message": (
                 f"筛选后没有可用于对比的库因子。"
                 f"已选择 {len(selected_names)} 个，成功加载 0 个，失败 {len(load_errors)} 个。"
-                f"失败示例：{failed_preview}"
+                f"失败示例：{failed_preview}。{hint}"
             ),
             "load_errors": load_errors,
         }), 400
