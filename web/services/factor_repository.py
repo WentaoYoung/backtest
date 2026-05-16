@@ -8,12 +8,13 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from data.date_params import coerce_yyyy_mm_dd
+from data.parquet_io import read_factors_all_dataframe, resolve_factors_all_paths
 
 # parquet 列集合缓存：(规范化键, mtime) -> 列名，避免每次 DESCRIBE / read_schema
 _PARQUET_COLS_CACHE: dict[str, Tuple[float, FrozenSet[str]]] = {}
 _PARQUET_COLS_LOCK = threading.Lock()
 
-# 单文件 factors_all.parquet 全表缓存：(规范化路径, mtime) -> DataFrame
+# factors_all 全表缓存：(规范化路径键, mtime) -> DataFrame（单文件或分片拼接）
 _SINGLE_PARQUET_FULL_CACHE: dict[str, Tuple[float, pd.DataFrame]] = {}
 _SINGLE_PARQUET_FULL_LOCK = threading.Lock()
 
@@ -105,13 +106,22 @@ class DuckDBFactorRepository(BaseFactorRepository):
         mode 为 'hive' 时 path_for_sql 为带 ** 的 glob（正斜杠）；'single' 时为单文件路径。
         """
         table = (table_name or "factors_all").strip()
-        single_fs = os.path.join(self.parquet_dir, f"{table}.parquet")
 
         if table == "factors_all" and self._hive_has_parquet():
             glob_sql = os.path.join(self.hive_dir, "**", "*.parquet").replace("\\", "/")
             ck = self._parquet_cache_key(self.hive_dir) + "::HIVE"
             return ("hive", glob_sql, ck, self._hive_tree_mtime())
 
+        if table == "factors_all":
+            shard_paths = resolve_factors_all_paths(self.parquet_dir)
+            if shard_paths:
+                path_sql = "|".join(p.replace("\\", "/") for p in shard_paths)
+                ck = self._parquet_cache_key(shard_paths[0]) + f"::SHARDS:{len(shard_paths)}"
+                from data.parquet_io import shard_cache_mtime
+
+                return ("sharded", path_sql, ck, shard_cache_mtime(shard_paths))
+
+        single_fs = os.path.join(self.parquet_dir, f"{table}.parquet")
         if os.path.isfile(single_fs):
             p = single_fs.replace("\\", "/")
             ck = self._parquet_cache_key(single_fs)
@@ -127,9 +137,14 @@ class DuckDBFactorRepository(BaseFactorRepository):
         return p.replace("'", "''")
 
     def _read_parquet_expr(self, mode: str, path_for_sql: str) -> str:
-        esc = self._sql_escape_path(path_for_sql)
         if mode == "hive":
+            esc = self._sql_escape_path(path_for_sql)
             return f"read_parquet('{esc}', hive_partitioning = true)"
+        if mode == "sharded":
+            paths = path_for_sql.split("|")
+            quoted = ", ".join(f"'{self._sql_escape_path(p)}'" for p in paths)
+            return f"read_parquet([{quoted}])"
+        esc = self._sql_escape_path(path_for_sql)
         return f"read_parquet('{esc}')"
 
     def _columns_for_plan(
@@ -144,9 +159,13 @@ class DuckDBFactorRepository(BaseFactorRepository):
             hit = _PARQUET_COLS_CACHE.get(cache_key)
             if hit is not None and hit[0] == cache_mtime:
                 return hit[1]
-        if mode == "single":
-            fs_path = os.path.normpath(path_for_sql.replace("/", os.sep))
-            schema = pq.read_schema(fs_path)
+        if mode in ("single", "sharded"):
+            if mode == "sharded":
+                paths = [os.path.normpath(p.replace("/", os.sep)) for p in path_for_sql.split("|")]
+                schema = pq.read_schema(paths[0])
+            else:
+                fs_path = os.path.normpath(path_for_sql.replace("/", os.sep))
+                schema = pq.read_schema(fs_path)
             cols = frozenset(schema.names)
         else:
             if con is None:
@@ -159,20 +178,25 @@ class DuckDBFactorRepository(BaseFactorRepository):
         return cols
 
     @staticmethod
-    def _read_single_parquet_full_dataframe(path_posix: str) -> pd.DataFrame:
-        """单文件 factors_all.parquet：pq.read_table -> to_pandas（带 mtime 缓存）。"""
-        fs_path = os.path.normpath(path_posix.replace("/", os.sep))
-        cache_path = os.path.normcase(os.path.abspath(fs_path))
-        try:
-            mt = os.path.getmtime(fs_path)
-        except OSError:
-            mt = -1.0
+    def _read_parquet_full_dataframe(mode: str, path_for_sql: str, cache_mtime: float) -> pd.DataFrame:
+        """factors_all 单文件或分片：拼接后 to_pandas（带 mtime 缓存）。"""
+        if mode == "sharded":
+            paths = [os.path.normpath(p.replace("/", os.sep)) for p in path_for_sql.split("|")]
+            cache_path = os.path.normcase("|".join(os.path.abspath(p) for p in paths))
+            mt = cache_mtime
+        else:
+            fs_path = os.path.normpath(path_for_sql.replace("/", os.sep))
+            paths = [fs_path]
+            cache_path = os.path.normcase(os.path.abspath(fs_path))
+            try:
+                mt = os.path.getmtime(fs_path)
+            except OSError:
+                mt = -1.0
         with _SINGLE_PARQUET_FULL_LOCK:
             hit = _SINGLE_PARQUET_FULL_CACHE.get(cache_path)
             if hit is not None and hit[0] == mt:
                 return hit[1]
-        table = pq.read_table(fs_path)
-        df = table.to_pandas()
+        df = read_factors_all_dataframe(paths)
         with _SINGLE_PARQUET_FULL_LOCK:
             _SINGLE_PARQUET_FULL_CACHE[cache_path] = (mt, df)
         return df
@@ -207,9 +231,11 @@ class DuckDBFactorRepository(BaseFactorRepository):
         plan = self._resolve_load_plan(table_name)
         if not plan:
             return None
-        mode, _path_sql, _ck, _mt = plan
+        mode, path_sql, _ck, _mt = plan
         if mode == "hive":
             return self.hive_dir if os.path.isdir(self.hive_dir) else None
+        if mode == "sharded":
+            return path_sql.split("|")[0]
         table = (table_name or "factors_all").strip()
         path = os.path.join(self.parquet_dir, f"{table}.parquet")
         return path if os.path.isfile(path) else None
@@ -249,8 +275,8 @@ class DuckDBFactorRepository(BaseFactorRepository):
                 print(f"[DuckDB] 本地文件缺少必要列(ticker/trade_dt): {label}")
                 return None
 
-            if mode == "single":
-                full_df = self._read_single_parquet_full_dataframe(path_sql)
+            if mode in ("single", "sharded"):
+                full_df = self._read_parquet_full_dataframe(mode, path_sql, cache_mtime)
                 factor_df = full_df[[ticker_col, "trade_dt", factor_name]].copy()
                 factor_df = factor_df.rename(columns={ticker_col: "ticker", factor_name: "factor_value"})
                 factor_df = factor_df[factor_df["factor_value"].notna()]
@@ -355,8 +381,8 @@ class DuckDBFactorRepository(BaseFactorRepository):
             if progress_callback:
                 progress_callback({"progress": 5.0, "stage": "DuckDB读取", "detail": "开始读取本地Parquet"})
 
-            if mode == "single":
-                full_df = self._read_single_parquet_full_dataframe(path_sql)
+            if mode in ("single", "sharded"):
+                full_df = self._read_parquet_full_dataframe(mode, path_sql, cache_mtime)
                 cols = [ticker_col, "trade_dt"] + available_factors
                 df = full_df[cols].copy()
                 nn = df[available_factors].notna().any(axis=1)

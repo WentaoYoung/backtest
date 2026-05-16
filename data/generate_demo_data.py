@@ -73,7 +73,9 @@ def generate_demo_dataset(
             )
 
     fac_long = pd.DataFrame(rows)
-    parquet_path = os.path.join(PARQUET_DIR, "factors_all.parquet")
+    from data.parquet_io import factors_all_single_path
+
+    parquet_path = factors_all_single_path(PARQUET_DIR)
     _write_parquet_duckdb(fac_long, parquet_path)
 
     # 宽表：每只股票独立随机游走价格（与 ticker 对齐）
@@ -118,9 +120,9 @@ def ensure_demo_dataset() -> bool:
     返回 True 表示本次运行后因子 Parquet 已存在（含新生成或原本就有）。
     """
     from web.config import DATA_DIR, PARQUET_DIR
+    from data.parquet_io import has_factors_all_parquet
 
-    parquet_path = os.path.join(PARQUET_DIR, "factors_all.parquet")
-    need = not os.path.isfile(parquet_path)
+    need = not has_factors_all_parquet(PARQUET_DIR)
     for name in ("adjclose_wide.csv", "adjopen_wide.csv", "market_value.csv"):
         if not os.path.isfile(os.path.join(DATA_DIR, name)):
             need = True
@@ -136,7 +138,7 @@ def ensure_demo_dataset() -> bool:
     print("[演示数据] 未检测到完整本地数据，正在生成 demo 数据集（无需数据库）…")
     generate_demo_dataset()
     print(f"[演示数据] 已写入: {PARQUET_DIR} 与 {DATA_DIR}")
-    return os.path.isfile(parquet_path)
+    return has_factors_all_parquet(PARQUET_DIR)
 
 
 if __name__ == "__main__":

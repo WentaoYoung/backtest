@@ -12,9 +12,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import duckdb
 import pandas as pd
-import pyarrow.parquet as pq
 
 from data.date_params import coerce_yyyy_mm_dd
+from data.parquet_io import has_factors_all_parquet, resolve_factors_all_paths
 
 try:
     from web.config import PARQUET_DIR, FACTORS_HIVE_DIR
@@ -54,6 +54,9 @@ class LocalParquetFactorDatabase:
             glob_sql = _hive_glob_sql()
             if glob_sql:
                 return "hive", glob_sql
+            paths = resolve_factors_all_paths(PARQUET_DIR)
+            if paths:
+                return "sharded", "|".join(p.replace("\\", "/") for p in paths)
         p = os.path.join(PARQUET_DIR, f"{table}.parquet")
         if os.path.isfile(p):
             return "single", p.replace("\\", "/")
@@ -82,10 +85,16 @@ class LocalParquetFactorDatabase:
                     df = con.execute(f"SELECT * FROM {expr}").df()
                 finally:
                     con.close()
+            elif mode == "sharded":
+                from data.parquet_io import read_factors_all_dataframe
+
+                paths = [p.replace("/", os.sep) for p in path_sql.split("|")]
+                df = read_factors_all_dataframe(paths)
             else:
+                from data.parquet_io import read_factors_all_dataframe
+
                 fs_path = os.path.normpath(path_sql.replace("/", os.sep))
-                table = pq.read_table(fs_path)
-                df = table.to_pandas()
+                df = read_factors_all_dataframe([fs_path])
             if "s_info_windcode" in df.columns and "ticker" not in df.columns:
                 df = df.rename(columns={"s_info_windcode": "ticker"})
             df["trade_dt"] = pd.to_datetime(df["trade_dt"])
@@ -210,7 +219,7 @@ def get_factor_database() -> LocalParquetFactorDatabase:
 
 
 def test_database_connection() -> Tuple[bool, str]:
-    if _hive_glob_sql() or os.path.isfile(os.path.join(PARQUET_DIR, "factors_all.parquet")):
+    if _hive_glob_sql() or has_factors_all_parquet(PARQUET_DIR):
         return True, "离线模式：使用本地 Parquet 因子数据（无需 MySQL）"
     return False, "未找到本地因子数据。请运行: python -m data.generate_demo_data"
 
