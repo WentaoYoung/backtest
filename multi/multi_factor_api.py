@@ -241,7 +241,9 @@ def _load_wide_csv(csv_name: str) -> pd.DataFrame | None:
     if not os.path.exists(path):
         return None
 
-    df = pd.read_csv(path)
+    from data.data_io import safe_read_csv
+
+    df = safe_read_csv(path)
     first_col = df.columns[0]
     if first_col in ("", "Unnamed: 0", "trade_dt", "date"):
         df = df.rename(columns={first_col: "trade_dt"})

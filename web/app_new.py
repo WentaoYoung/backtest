@@ -732,7 +732,9 @@ def load_base_data():
             print(f"因子数据文件不存在: {factor_path}")
             return None
 
-        factor_wide = pd.read_csv(factor_path)
+        from data.data_io import safe_read_csv
+
+        factor_wide = safe_read_csv(factor_path)
 
         # 检测并处理日期列（可能是第一列，名称可能为空或 'trade_dt' 或 'Unnamed: 0'）
         first_col = factor_wide.columns[0]
@@ -760,7 +762,7 @@ def load_base_data():
             print(f"价格数据文件不存在: {price_path}")
             return None
 
-        price_wide = pd.read_csv(price_path)
+        price_wide = safe_read_csv(price_path)
 
         # 处理日期列
         first_col = price_wide.columns[0]

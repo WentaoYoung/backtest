@@ -14,8 +14,30 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 _SHARD_RE = re.compile(r"^factors_all_part(\d+)\.parquet$", re.IGNORECASE)
+_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
 # Stay under GitHub's 100 MB blob limit (use 95 MB target when splitting).
 DEFAULT_MAX_SHARD_BYTES = 95 * 1024 * 1024
+
+_LFS_DEPLOY_HINT = (
+    "Git LFS pointer file detected (not real data). "
+    "On Railway, ensure nixpacks.toml runs `git lfs pull` during build, "
+    "or commit this file as a regular git blob (not LFS)."
+)
+
+
+def is_git_lfs_pointer(path: str) -> bool:
+    """True if path is a Git LFS stub instead of the actual binary."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(128)
+    except OSError:
+        return False
+    return head.startswith(_LFS_POINTER_PREFIX)
+
+
+def assert_not_lfs_pointer(path: str) -> None:
+    if is_git_lfs_pointer(path):
+        raise RuntimeError(f"{_LFS_DEPLOY_HINT}\nFile: {path}")
 
 
 def factors_all_single_path(parquet_dir: str) -> str:
@@ -60,6 +82,8 @@ def shard_cache_mtime(paths: List[str]) -> float:
 
 
 def read_factors_all_table(paths: List[str]) -> pa.Table:
+    for p in paths:
+        assert_not_lfs_pointer(p)
     if len(paths) == 1:
         return pq.read_table(paths[0])
     return pa.concat_tables([pq.read_table(p) for p in paths], promote_options="default")

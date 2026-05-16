@@ -1,0 +1,10 @@
+# Railway/Nixpacks: fetch Git LFS blobs (parquet shards, large CSVs).
+# Without this, deploy gets tiny pointer files instead of real data.
+[phases.setup]
+nixPkgs = ["git", "git-lfs"]
+
+[phases.build]
+cmds = [
+  "git lfs install",
+  "git lfs pull",
+]
