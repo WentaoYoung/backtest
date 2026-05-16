@@ -932,10 +932,12 @@ def get_data_range():
     try:
         price_path = os.path.join(DATA_DIR, 'adjclose_wide.csv')
         if os.path.exists(price_path):
-            df = pd.read_csv(price_path)
+            from data.data_io import safe_read_csv
+
+            df = safe_read_csv(price_path)
             first_col = df.columns[0]
             df = df.rename(columns={first_col: 'trade_dt'})
-            df['trade_dt'] = pd.to_datetime(df['trade_dt'])
+            df['trade_dt'] = pd.to_datetime(df['trade_dt'], format='mixed', errors='coerce')
             min_date = df['trade_dt'].min().strftime('%Y-%m-%d')
             max_date = df['trade_dt'].max().strftime('%Y-%m-%d')
             n_tickers = len(df.columns) - 1

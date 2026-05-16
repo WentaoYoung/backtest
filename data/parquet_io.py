@@ -7,11 +7,23 @@ from __future__ import annotations
 import glob
 import os
 import re
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
+import duckdb
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+META_COLS: Set[str] = {
+    "trade_dt",
+    "ticker",
+    "s_info_windcode",
+    "hive_ym",
+    "hive_y",
+    "year",
+    "month",
+    "dt",
+}
 
 _SHARD_RE = re.compile(r"^factors_all_part(\d+)\.parquet$", re.IGNORECASE)
 _LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
@@ -91,6 +103,44 @@ def read_factors_all_table(paths: List[str]) -> pa.Table:
 
 def read_factors_all_dataframe(paths: List[str]) -> pd.DataFrame:
     return read_factors_all_table(paths).to_pandas()
+
+
+def _sql_escape_path(p: str) -> str:
+    return p.replace("\\", "/").replace("'", "''")
+
+
+def duckdb_parquet_expr(mode: str, path_sql: str) -> str:
+    """DuckDB read_parquet expression for hive / sharded / single sources."""
+    if mode == "hive":
+        return f"read_parquet('{_sql_escape_path(path_sql)}', hive_partitioning = true)"
+    if mode == "sharded":
+        quoted = ", ".join(f"'{_sql_escape_path(p)}'" for p in path_sql.split("|"))
+        return f"read_parquet([{quoted}])"
+    return f"read_parquet('{_sql_escape_path(path_sql)}')"
+
+
+def read_factors_schema_columns(paths: List[str]) -> List[str]:
+    """Factor column names from parquet schema only (no full table load)."""
+    for p in paths:
+        assert_not_lfs_pointer(p)
+    schema = pq.read_schema(paths[0])
+    return sorted(c for c in schema.names if c not in META_COLS)
+
+
+def read_factors_date_range(mode: str, path_sql: str) -> Tuple[Optional[str], Optional[str]]:
+    """MIN/MAX trade_dt via DuckDB without loading the full table."""
+    expr = duckdb_parquet_expr(mode, path_sql)
+    con = duckdb.connect(database=":memory:")
+    try:
+        row = con.execute(
+            f"SELECT MIN(CAST(trade_dt AS DATE)), MAX(CAST(trade_dt AS DATE)) FROM {expr}"
+        ).fetchone()
+    finally:
+        con.close()
+    if not row or row[0] is None:
+        return None, None
+    lo, hi = row[0], row[1]
+    return str(lo)[:10], str(hi)[:10]
 
 
 def split_factors_all_parquet(

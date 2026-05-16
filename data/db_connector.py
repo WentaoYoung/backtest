@@ -14,7 +14,14 @@ import duckdb
 import pandas as pd
 
 from data.date_params import coerce_yyyy_mm_dd
-from data.parquet_io import has_factors_all_parquet, resolve_factors_all_paths
+from data.parquet_io import (
+    META_COLS,
+    duckdb_parquet_expr,
+    has_factors_all_parquet,
+    read_factors_date_range,
+    read_factors_schema_columns,
+    resolve_factors_all_paths,
+)
 
 try:
     from web.config import PARQUET_DIR, FACTORS_HIVE_DIR
@@ -23,10 +30,6 @@ except ImportError:
     DATA_DIR = os.path.join(_root, "data")
     PARQUET_DIR = os.path.join(DATA_DIR, "parquet_loaded")
     FACTORS_HIVE_DIR = os.path.join(_root, "factors_hive")
-
-_META_COLS = frozenset(
-    {"trade_dt", "ticker", "s_info_windcode", "hive_ym", "hive_y", "year", "month", "dt"}
-)
 
 
 def _hive_glob_sql() -> Optional[str]:
@@ -39,13 +42,16 @@ def _hive_glob_sql() -> Optional[str]:
     return None
 
 
+def _qident(name: str) -> str:
+    return '"' + str(name).replace('"', '""') + '"'
+
+
 class LocalParquetFactorDatabase:
-    """从 factors_all.parquet（或 Hive 分区目录）提供与旧 MySQL 封装相同的方法名。"""
+    """从 factors_all parquet 分片（或 Hive）提供与旧 MySQL 封装相同的方法名。"""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._full_long: Optional[pd.DataFrame] = None
-        self._cache_key: Optional[str] = None
+        self._schema_cache: Optional[Tuple[str, List[str]]] = None
 
     def _read_sql_source(self, table_name: Optional[str]) -> Tuple[str, str]:
         """与 DuckDBFactorRepository 一致：factors_all 优先 Hive 分区目录。"""
@@ -62,48 +68,86 @@ class LocalParquetFactorDatabase:
             return "single", p.replace("\\", "/")
         return "", ""
 
-    def _invalidate_if_needed(self) -> None:
+    def _invalidate_schema_cache(self) -> None:
         mode, path = self._read_sql_source(None)
         key = f"{mode}:{path}"
-        if key != self._cache_key:
-            self._full_long = None
-            self._cache_key = key
+        if self._schema_cache is None or self._schema_cache[0] != key:
+            self._schema_cache = None
 
-    def _load_full_long(self) -> Optional[pd.DataFrame]:
-        self._invalidate_if_needed()
+    def _factor_columns(self) -> List[str]:
+        self._invalidate_schema_cache()
         mode, path_sql = self._read_sql_source(None)
         if not path_sql:
-            return None
+            return []
+        key = f"{mode}:{path_sql}"
         with self._lock:
-            if self._full_long is not None:
-                return self._full_long
+            if self._schema_cache is not None and self._schema_cache[0] == key:
+                return self._schema_cache[1]
             if mode == "hive":
-                esc = path_sql.replace("'", "''")
-                expr = f"read_parquet('{esc}', hive_partitioning = true)"
                 con = duckdb.connect(database=":memory:")
                 try:
-                    df = con.execute(f"SELECT * FROM {expr}").df()
+                    expr = duckdb_parquet_expr(mode, path_sql)
+                    names = con.execute(f"DESCRIBE SELECT * FROM {expr}").df()["column_name"].astype(str).tolist()
                 finally:
                     con.close()
+                cols = sorted(c for c in names if c not in META_COLS)
             elif mode == "sharded":
-                from data.parquet_io import read_factors_all_dataframe
-
                 paths = [p.replace("/", os.sep) for p in path_sql.split("|")]
-                df = read_factors_all_dataframe(paths)
+                cols = read_factors_schema_columns(paths)
             else:
-                from data.parquet_io import read_factors_all_dataframe
+                import pyarrow.parquet as pq
 
                 fs_path = os.path.normpath(path_sql.replace("/", os.sep))
-                df = read_factors_all_dataframe([fs_path])
-            if "s_info_windcode" in df.columns and "ticker" not in df.columns:
-                df = df.rename(columns={"s_info_windcode": "ticker"})
-            df["trade_dt"] = pd.to_datetime(df["trade_dt"])
-            df["ticker"] = df["ticker"].astype(str).str.upper()
-            self._full_long = df
-            return df
+                cols = sorted(c for c in pq.read_schema(fs_path).names if c not in META_COLS)
+            self._schema_cache = (key, cols)
+            return cols
 
-    def _factor_columns(self, df: pd.DataFrame) -> List[str]:
-        return [c for c in df.columns if c not in _META_COLS]
+    def _duckdb_query(self, sql: str, params: Optional[List] = None) -> pd.DataFrame:
+        mode, path_sql = self._read_sql_source(None)
+        if not path_sql:
+            return pd.DataFrame()
+        con = duckdb.connect(database=":memory:")
+        try:
+            if params:
+                return con.execute(sql, params).df()
+            return con.execute(sql).df()
+        finally:
+            con.close()
+
+    def _from_expr(self) -> str:
+        mode, path_sql = self._read_sql_source(None)
+        if not path_sql:
+            raise RuntimeError("No parquet source configured")
+        return duckdb_parquet_expr(mode, path_sql)
+
+    def _schema_column_names(self) -> List[str]:
+        mode, path_sql = self._read_sql_source(None)
+        if not path_sql:
+            return []
+        if mode == "sharded":
+            import pyarrow.parquet as pq
+
+            paths = [p.replace("/", os.sep) for p in path_sql.split("|")]
+            return list(pq.read_schema(paths[0]).names)
+        if mode == "single":
+            import pyarrow.parquet as pq
+
+            return list(pq.read_schema(os.path.normpath(path_sql.replace("/", os.sep))).names)
+        con = duckdb.connect(database=":memory:")
+        try:
+            expr = duckdb_parquet_expr(mode, path_sql)
+            df = con.execute(f"DESCRIBE SELECT * FROM {expr}").df()
+            return df["column_name"].astype(str).tolist()
+        finally:
+            con.close()
+
+    def _ticker_col(self) -> Optional[str]:
+        names = self._schema_column_names()
+        if "s_info_windcode" in names:
+            return "s_info_windcode"
+        if "ticker" in names:
+            return "ticker"
+        return None
 
     def load_factor(
         self,
@@ -112,16 +156,34 @@ class LocalParquetFactorDatabase:
         end_date: Optional[str] = None,
         table_name: Optional[str] = None,
     ) -> Optional[pd.DataFrame]:
-        df = self._load_full_long()
-        if df is None or factor_name not in df.columns:
+        cols = self._factor_columns()
+        if factor_name not in cols:
+            return None
+        ticker_col = self._ticker_col()
+        if ticker_col is None or "trade_dt" not in self._schema_column_names():
             return None
         sd, ed = coerce_yyyy_mm_dd(start_date), coerce_yyyy_mm_dd(end_date)
-        out = df[["ticker", "trade_dt", factor_name]].rename(columns={factor_name: "factor_value"})
-        out = out[out["factor_value"].notna()]
+        from_expr = self._from_expr()
+        sql = f"""
+            SELECT
+                {_qident(ticker_col)} AS ticker,
+                {_qident('trade_dt')},
+                {_qident(factor_name)} AS factor_value
+            FROM {from_expr}
+            WHERE {_qident(factor_name)} IS NOT NULL
+        """
+        params: List = []
         if sd:
-            out = out[out["trade_dt"] >= pd.to_datetime(sd)]
+            sql += " AND CAST(trade_dt AS DATE) >= ?"
+            params.append(sd)
         if ed:
-            out = out[out["trade_dt"] <= pd.to_datetime(ed)]
+            sql += " AND CAST(trade_dt AS DATE) <= ?"
+            params.append(ed)
+        out = self._duckdb_query(sql, params)
+        if out.empty:
+            return out
+        out["trade_dt"] = pd.to_datetime(out["trade_dt"])
+        out["ticker"] = out["ticker"].astype(str).str.upper()
         return out
 
     def load_multiple_factors(
@@ -132,40 +194,48 @@ class LocalParquetFactorDatabase:
         table_name: Optional[str] = None,
         progress_callback: Optional[Callable[[dict], None]] = None,
     ) -> Optional[pd.DataFrame]:
-        df = self._load_full_long()
-        if df is None:
-            return None
-        names = [n for n in factor_names if n in df.columns]
+        cols = self._factor_columns()
+        names = [n for n in factor_names if n in cols]
         if not names:
             return None
+        ticker_col = self._ticker_col()
+        if ticker_col is None or "trade_dt" not in self._schema_column_names():
+            return None
         if progress_callback:
-            progress_callback({"progress": 10.0, "stage": "本地Parquet", "detail": "读取多因子"})
+            progress_callback({"progress": 10.0, "stage": "本地Parquet", "detail": "DuckDB读取多因子"})
         sd, ed = coerce_yyyy_mm_dd(start_date), coerce_yyyy_mm_dd(end_date)
-        cols = ["ticker", "trade_dt"] + names
-        out = df[cols].copy()
-        nn = out[names].notna().any(axis=1)
-        out = out[nn]
+        from_expr = self._from_expr()
+        select_cols = ", ".join(_qident(f) for f in names)
+        where_nn = " OR ".join(f"{_qident(f)} IS NOT NULL" for f in names)
+        sql = f"""
+            SELECT {_qident(ticker_col)} AS ticker, {_qident('trade_dt')}, {select_cols}
+            FROM {from_expr}
+            WHERE ({where_nn})
+        """
+        params: List = []
         if sd:
-            out = out[out["trade_dt"] >= pd.to_datetime(sd)]
+            sql += " AND CAST(trade_dt AS DATE) >= ?"
+            params.append(sd)
         if ed:
-            out = out[out["trade_dt"] <= pd.to_datetime(ed)]
+            sql += " AND CAST(trade_dt AS DATE) <= ?"
+            params.append(ed)
+        out = self._duckdb_query(sql, params)
         if progress_callback:
             progress_callback({"progress": 100.0, "stage": "本地Parquet", "detail": "完成"})
+        if out.empty:
+            return out
+        out["trade_dt"] = pd.to_datetime(out["trade_dt"])
+        out["ticker"] = out["ticker"].astype(str).str.upper()
         return out
 
     def get_available_factors_dynamic(self, table_name: Optional[str] = None) -> List[str]:
-        df = self._load_full_long()
-        if df is None:
-            return []
-        return sorted(self._factor_columns(df))
+        return self._factor_columns()
 
     def get_date_range(self) -> Tuple[Optional[str], Optional[str]]:
-        df = self._load_full_long()
-        if df is None or df.empty:
+        mode, path_sql = self._read_sql_source(None)
+        if not path_sql:
             return None, None
-        lo = df["trade_dt"].min()
-        hi = df["trade_dt"].max()
-        return lo.strftime("%Y-%m-%d"), hi.strftime("%Y-%m-%d")
+        return read_factors_date_range(mode, path_sql)
 
     def get_all_factor_tables(self) -> List[Dict[str, Any]]:
         factors = self.get_available_factors_dynamic("factors_all")
@@ -195,15 +265,28 @@ class LocalParquetFactorDatabase:
         }
 
     def get_all_factors_wide(self, factor_table: Optional[str] = None) -> Dict[str, pd.DataFrame]:
-        df = self._load_full_long()
-        if df is None:
+        """按因子列逐个 DuckDB 查询并 pivot，避免一次性加载全表。"""
+        cols = self._factor_columns()
+        if not cols:
             return {}
+        ticker_col = self._ticker_col()
+        if ticker_col is None:
+            return {}
+        from_expr = self._from_expr()
         out: Dict[str, pd.DataFrame] = {}
-        for col in self._factor_columns(df):
-            sub = df[["trade_dt", "ticker", col]].dropna(subset=[col])
-            wide = sub.pivot(index="trade_dt", columns="ticker", values=col)
+        for col in cols:
+            sql = f"""
+                SELECT CAST(trade_dt AS DATE) AS trade_dt,
+                       UPPER(CAST({_qident(ticker_col)} AS VARCHAR)) AS ticker,
+                       {_qident(col)} AS val
+                FROM {from_expr}
+                WHERE {_qident(col)} IS NOT NULL
+            """
+            sub = self._duckdb_query(sql)
+            if sub.empty:
+                continue
+            wide = sub.pivot(index="trade_dt", columns="ticker", values="val")
             wide.index = pd.to_datetime(wide.index)
-            wide.columns = wide.columns.astype(str).str.upper()
             out[col] = wide.sort_index()
         return out
 
