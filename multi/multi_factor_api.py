@@ -91,6 +91,61 @@ def _coerce_trade_dt_column(s: pd.Series) -> pd.Series:
     return pd.to_datetime(s, errors="coerce")
 
 
+def _parse_uploaded_factor_csv(content: bytes) -> list[tuple[str, pd.DataFrame]]:
+    """
+    解析用户上传的长表 CSV：
+    - 必须含 trade_dt、ticker 或 s_info_windcode
+    - 其余列各为一个因子，列名即因子名
+  返回 [(factor_name, wide_df), ...]，wide_df 索引为 trade_dt、列为 ticker。
+    """
+    df = pd.read_csv(io.BytesIO(content))
+    drop_cols = [c for c in df.columns if str(c).strip() in ("", "Unnamed: 0") or str(c).startswith("Unnamed:")]
+    if drop_cols:
+        df = df.drop(columns=drop_cols, errors="ignore")
+    df.columns = [str(c).strip() for c in df.columns]
+
+    lower_map = {c.lower(): c for c in df.columns}
+    trade_col = lower_map.get("trade_dt") or lower_map.get("date")
+    if not trade_col:
+        raise ValueError("CSV 必须包含 trade_dt 列")
+
+    ticker_col = lower_map.get("ticker") or lower_map.get("s_info_windcode")
+    if not ticker_col:
+        raise ValueError("CSV 必须包含 ticker 或 s_info_windcode 列")
+
+    meta_cols = {trade_col, ticker_col}
+    if "ticker" in lower_map and "s_info_windcode" in lower_map:
+        meta_cols.add(lower_map["ticker"])
+        meta_cols.add(lower_map["s_info_windcode"])
+
+    factor_cols = [c for c in df.columns if c not in meta_cols]
+    if not factor_cols:
+        raise ValueError("除 trade_dt 与 ticker/s_info_windcode 外，至少需要一个因子列")
+
+    df[trade_col] = _coerce_trade_dt_column(df[trade_col])
+    df = df.dropna(subset=[trade_col])
+
+    parsed: list[tuple[str, pd.DataFrame]] = []
+    for fcol in factor_cols:
+        factor_name = str(fcol).strip()
+        if not factor_name:
+            continue
+        tmp = df[[trade_col, ticker_col, fcol]].copy()
+        tmp = tmp.rename(columns={trade_col: "trade_dt", ticker_col: "ticker", fcol: "value"})
+        tmp["ticker"] = tmp["ticker"].map(_normalize_ticker)
+        tmp["value"] = pd.to_numeric(tmp["value"], errors="coerce")
+        tmp = tmp.dropna(subset=["ticker"])
+        tmp = tmp.dropna(subset=["value"])
+        if tmp.empty:
+            continue
+        wide = tmp.pivot(index="trade_dt", columns="ticker", values="value").sort_index()
+        parsed.append((factor_name, wide))
+
+    if not parsed:
+        raise ValueError("未能从 CSV 解析出有效因子数据（请检查因子列是否有数值）")
+    return parsed
+
+
 def _normalize_ticker(x: object) -> str:
     """
     统一 ticker 格式，尽量归一到 Wind 风格：000001.SZ / 600000.SH
@@ -293,24 +348,21 @@ def _ensure_shared_data() -> bool:
 @multi_factor_bp.route("/upload", methods=["POST"])
 def upload_factors():
     """
-    批量上传多个因子 CSV 文件（宽表格式）
+    批量上传因子 CSV（长表：trade_dt + ticker/s_info_windcode + 多列因子）。
 
     Form-data:
-        files[]: 多个 CSV 文件
-        names[]: 对应的因子名称（可选，默认用文件名去掉 .csv）
+        files[]: 一个或多个 CSV；每个文件可含多列因子，列名即因子名。
 
     Returns:
         {
             "success": true,
             "uploaded": [
-                {"name": "ep_ttm", "dates": 1500, "tickers": 3800,
-                 "start": "2018-01-02", "end": "2024-12-31"}
+                {"name": "LNCAP", "file": "factors.csv", "dates": 1500, ...}
             ],
             "errors": []
         }
     """
     files = request.files.getlist("files[]")
-    names = request.form.getlist("names[]")
 
     if not files:
         return jsonify({"success": False, "message": "未收到文件"}), 400
@@ -318,57 +370,25 @@ def upload_factors():
     uploaded = []
     errors = []
 
-    for i, f in enumerate(files):
-        factor_name = (
-            names[i] if i < len(names) and names[i].strip()
-            else f.filename.replace(".csv", "").strip()
-        )
-        if not factor_name:
-            factor_name = f"factor_{i+1}"
-
+    for f in files:
         try:
-            df = pd.read_csv(io.BytesIO(f.read()))
-            if "trade_dt" not in df.columns:
-                raise ValueError("缺少 trade_dt 列")
-            # 统一列名便于识别长表/宽表
-            lower_map = {c.lower().strip(): c for c in df.columns}
-            trade_col = lower_map.get("trade_dt", "trade_dt")
-            ticker_col = lower_map.get("ticker")
-            value_col = (
-                lower_map.get("factor")
-                or lower_map.get("factor_value")
-                or lower_map.get("value")
-            )
-
-            df[trade_col] = _coerce_trade_dt_column(df[trade_col])
-            df = df.dropna(subset=[trade_col])
-
-            # 兼容长表：trade_dt/ticker/factor_value -> pivot 成宽表
-            if ticker_col and value_col:
-                tmp = df[[trade_col, ticker_col, value_col]].copy()
-                tmp = tmp.rename(columns={trade_col: "trade_dt", ticker_col: "ticker", value_col: "factor"})
-                tmp["ticker"] = tmp["ticker"].map(_normalize_ticker)
-                tmp["factor"] = pd.to_numeric(tmp["factor"], errors="coerce")
-                tmp = tmp.dropna(subset=["ticker"])
-                wide = tmp.pivot(index="trade_dt", columns="ticker", values="factor").sort_index()
-                df_wide = wide
-            else:
-                # 默认宽表：trade_dt + 多个股票列
-                df = df.rename(columns={trade_col: "trade_dt"})
-                df_wide = df.set_index("trade_dt").sort_index()
-                df_wide.columns = df_wide.columns.map(_normalize_ticker)
-                df_wide = df_wide.apply(pd.to_numeric, errors="coerce")
-
-            df = df_wide
-
-            _state["factors"][factor_name] = df
-            uploaded.append({
-                "name": factor_name,
-                "dates": len(df),
-                "tickers": len(df.columns),
-                "start": str(df.index.min().date()),
-                "end": str(df.index.max().date()),
-            })
+            factors_in_file = _parse_uploaded_factor_csv(f.read())
+            for factor_name, df_wide in factors_in_file:
+                if factor_name in _state["factors"]:
+                    errors.append({
+                        "file": f.filename,
+                        "factor": factor_name,
+                        "error": f"因子 {factor_name} 已存在，已用新数据覆盖",
+                    })
+                _state["factors"][factor_name] = df_wide
+                uploaded.append({
+                    "name": factor_name,
+                    "file": f.filename,
+                    "dates": len(df_wide),
+                    "tickers": len(df_wide.columns),
+                    "start": str(df_wide.index.min().date()),
+                    "end": str(df_wide.index.max().date()),
+                })
         except Exception as e:
             errors.append({"file": f.filename, "error": str(e)})
 
