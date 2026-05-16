@@ -365,11 +365,13 @@ def set_price_df(price_df: pd.DataFrame) -> None:
 def _load_local_price_df() -> pd.DataFrame | None:
     """兜底从本地 adjopen_wide.csv 加载开盘价宽表。"""
     global _price_source
-    path = os.path.join(DATA_DIR, "adjopen_wide.csv")
-    if not os.path.exists(path):
+    from data.data_io import resolve_data_csv_path, safe_read_csv
+
+    path = resolve_data_csv_path(DATA_DIR, "adjopen_wide.csv")
+    if not path:
         return None
     try:
-        df = pd.read_csv(path)
+        df = safe_read_csv(path)
         first_col = df.columns[0]
         if first_col in ("", "Unnamed: 0", "trade_dt", "date"):
             df = df.rename(columns={first_col: "trade_dt"})

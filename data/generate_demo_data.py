@@ -95,7 +95,13 @@ def generate_demo_dataset(
     os.makedirs(DATA_DIR, exist_ok=True)
     close_w.to_csv(os.path.join(DATA_DIR, "adjclose_wide.csv"), index=False)
     open_w.to_csv(os.path.join(DATA_DIR, "adjopen_wide.csv"), index=False)
-    mkt_w.to_csv(os.path.join(DATA_DIR, "market_value.csv"), index=False)
+    import gzip
+    import shutil
+
+    mkt_csv = os.path.join(DATA_DIR, "market_value.csv")
+    mkt_w.to_csv(mkt_csv, index=False)
+    with open(mkt_csv, "rb") as f_in, gzip.open(mkt_csv + ".gz", "wb") as f_out:
+        shutil.copyfileobj(f_in, f_out)
 
     # 本地基准：简单随机游走净值
     bench = pd.DataFrame(
@@ -123,8 +129,10 @@ def ensure_demo_dataset() -> bool:
     from data.parquet_io import has_factors_all_parquet
 
     need = not has_factors_all_parquet(PARQUET_DIR)
+    from data.data_io import resolve_data_csv_path
+
     for name in ("adjclose_wide.csv", "adjopen_wide.csv", "market_value.csv"):
-        if not os.path.isfile(os.path.join(DATA_DIR, name)):
+        if resolve_data_csv_path(DATA_DIR, name) is None:
             need = True
             break
     if not need:

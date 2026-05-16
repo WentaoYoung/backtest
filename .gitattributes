@@ -1,3 +1,2 @@
-data/market_value.csv filter=lfs diff=lfs merge=lfs -text
-data/*.csv filter=lfs diff=lfs merge=lfs -text
-# Parquet shards are each <100MB — store as normal git blobs (Railway does not pull LFS by default).
+# Runtime data files are stored as regular git blobs (Railway deploy has no git-lfs pull).
+# Large market cap table ships as data/market_value.csv.gz (~48MB).

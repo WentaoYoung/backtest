@@ -237,11 +237,11 @@ def _build_single_factor_backtest_payload(factor_name: str, result, batch_params
 
 
 def _load_wide_csv(csv_name: str) -> pd.DataFrame | None:
-    path = DATA_DIR + f"\\{csv_name}"
-    if not os.path.exists(path):
-        return None
+    from data.data_io import resolve_data_csv_path, safe_read_csv
 
-    from data.data_io import safe_read_csv
+    path = resolve_data_csv_path(DATA_DIR, csv_name)
+    if not path:
+        return None
 
     df = safe_read_csv(path)
     first_col = df.columns[0]

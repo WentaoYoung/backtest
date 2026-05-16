@@ -482,9 +482,11 @@ def load_factor_from_database(factor_name: str, start_date: str = None, end_date
         if _price_cache is None:
             print("    [FILE] 首次加载开盘价数据...")
             # 修改 1：使用 adjopen_wide.csv 文件
-            price_path = os.path.join(DATA_DIR, 'adjopen_wide.csv')
-            if os.path.exists(price_path):
-                price_wide = pd.read_csv(price_path)
+            from data.data_io import resolve_data_csv_path, safe_read_csv
+
+            price_path = resolve_data_csv_path(DATA_DIR, "adjopen_wide.csv")
+            if price_path:
+                price_wide = safe_read_csv(price_path)
                 first_col = price_wide.columns[0]
                 if first_col in ['', 'Unnamed: 0', 'trade_dt', 'date']:
                     price_wide = price_wide.rename(columns={first_col: 'trade_dt'})
@@ -727,12 +729,12 @@ def load_base_data():
     """加载基础数据"""
     try:
         # 加载因子数据 (宽表格式: trade_dt, stock1, stock2, ...)
-        factor_path = os.path.join(DATA_DIR, 'market_value.csv')
-        if not os.path.exists(factor_path):
-            print(f"因子数据文件不存在: {factor_path}")
-            return None
+        from data.data_io import resolve_data_csv_path, safe_read_csv
 
-        from data.data_io import safe_read_csv
+        factor_path = resolve_data_csv_path(DATA_DIR, "market_value.csv")
+        if not factor_path:
+            print("因子数据文件不存在: market_value.csv 或 market_value.csv.gz")
+            return None
 
         factor_wide = safe_read_csv(factor_path)
 
@@ -757,9 +759,9 @@ def load_base_data():
         factor_long['ticker'] = factor_long['ticker'].str.upper()
 
         # 加载价格数据 (宽表格式)
-        price_path = os.path.join(DATA_DIR, 'adjclose_wide.csv')
-        if not os.path.exists(price_path):
-            print(f"价格数据文件不存在: {price_path}")
+        price_path = resolve_data_csv_path(DATA_DIR, "adjclose_wide.csv")
+        if not price_path:
+            print("价格数据文件不存在: adjclose_wide.csv")
             return None
 
         price_wide = safe_read_csv(price_path)
@@ -805,9 +807,9 @@ def load_base_data():
             cache = LibraryCache()
             cache.load(get_factor_database())
             set_library_cache(cache)
-            open_path = os.path.join(DATA_DIR, 'adjopen_wide.csv')
-            if os.path.exists(open_path):
-                open_wide = pd.read_csv(open_path)
+            open_path = resolve_data_csv_path(DATA_DIR, "adjopen_wide.csv")
+            if open_path:
+                open_wide = safe_read_csv(open_path)
                 first_col = open_wide.columns[0]
                 if first_col in ['', 'Unnamed: 0', 'trade_dt', 'date']:
                     open_wide = open_wide.rename(columns={first_col: 'trade_dt'})
@@ -824,9 +826,9 @@ def load_base_data():
         # 多因子批量回测：价格宽表必须与单因子库表回测一致，使用 adjopen_wide（BacktestEngine 口径为开盘价收益）
         try:
             if multi_factor_bp is not None and init_shared_data is not None:
-                open_path_mf = os.path.join(DATA_DIR, "adjopen_wide.csv")
-                if os.path.exists(open_path_mf):
-                    open_w = pd.read_csv(open_path_mf)
+                open_path_mf = resolve_data_csv_path(DATA_DIR, "adjopen_wide.csv")
+                if open_path_mf:
+                    open_w = safe_read_csv(open_path_mf)
                     fc0 = open_w.columns[0]
                     if fc0 in ["", "Unnamed: 0", "trade_dt", "date"]:
                         open_w = open_w.rename(columns={fc0: "trade_dt"})
@@ -930,10 +932,10 @@ def get_data_range():
     如果缺少文件，返回空值但 success=True，避免前端 404。
     """
     try:
-        price_path = os.path.join(DATA_DIR, 'adjclose_wide.csv')
-        if os.path.exists(price_path):
-            from data.data_io import safe_read_csv
+        from data.data_io import resolve_data_csv_path, safe_read_csv
 
+        price_path = resolve_data_csv_path(DATA_DIR, "adjclose_wide.csv")
+        if price_path:
             df = safe_read_csv(price_path)
             first_col = df.columns[0]
             df = df.rename(columns={first_col: 'trade_dt'})
@@ -1561,13 +1563,15 @@ def load_custom_factor_csv(csv_data: str, start_date: str = None, end_date: str 
 
     # 加载本地开盘价数据（宽表格式）
     global _price_cache
-    price_path = os.path.join(DATA_DIR, 'adjopen_wide.csv')   # 修改为开盘价文件
-    if not os.path.exists(price_path):
-        print(f"[WARN]️ 本地开盘价数据不存在: {price_path}")
+    from data.data_io import resolve_data_csv_path, safe_read_csv
+
+    price_path = resolve_data_csv_path(DATA_DIR, "adjopen_wide.csv")
+    if not price_path:
+        print("[WARN] 本地开盘价数据不存在: adjopen_wide.csv 或 adjopen_wide.csv.gz")
         return None
 
     if _price_cache is None:
-        price_wide = pd.read_csv(price_path)
+        price_wide = safe_read_csv(price_path)
         first_col = price_wide.columns[0]
         if first_col in ['', 'Unnamed: 0', 'trade_dt', 'date']:
             price_wide = price_wide.rename(columns={first_col: 'trade_dt'})

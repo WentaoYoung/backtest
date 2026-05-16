@@ -1,0 +1,8 @@
+# Large uncompressed market cap table — ship data/market_value.csv.gz instead.
+data/market_value.csv
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
